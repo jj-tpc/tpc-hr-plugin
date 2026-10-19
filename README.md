@@ -70,7 +70,7 @@ claude plugin marketplace add ~/project_tpc/hr_attrition_plugin
 claude plugin install hr-attrition@tpc-hr
 ```
 
-또는 GitHub 저장소에서 바로:
+또는 GitHub 저장소에서 바로(공개 저장소라 로그인 없이 설치됩니다):
 
 ```
 /plugin install hr-attrition --marketplace jj-tpc/tpc-hr-plugin
