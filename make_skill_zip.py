@@ -87,5 +87,4 @@ def check_zips(sample_xlsx: Path | None) -> None:
 if __name__ == "__main__":
     build()
     if "--check" in sys.argv:
-        sample = next(iter(Path.home().glob("project_tpc/offpiste_synthetic_HR_data/output/it_platform/synthetic_hr_it_platform.xlsx")), None)
-        check_zips(sample)
+        check_zips(ROOT / "fixtures" / "hr_fixture_186.xlsx")

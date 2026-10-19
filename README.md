@@ -141,12 +141,9 @@ python skill/predict_attrition/scripts/predict_attrition.py --input HR_next.xlsx
 
 ### 샘플 데이터
 
-| 파일 | 내용 |
-|---|---|
-| `fixtures/hr_fixture_186.xlsx` | 합성 186명, 기준일 2026-04-30, 이후 180일 퇴사 58명과 `퇴사라벨` 시트 → **예측 모드** 경로 확인용. `python tools/make_fixture.py`로 재생성 |
-| `../offpiste_synthetic_HR_data/output/<preset>/synthetic_hr_<preset>.xlsx` | IT 플랫폼 / 자동차 전장 제조, 현재 재직자 100명, 라벨 없음 → **진단 모드** |
+`fixtures/hr_fixture_186.xlsx` 하나입니다. 가상 회사 (주)픽스처랩스의 기준일 2026-04-30 재직자 186명을 난수로 만든 표준 HR 워크북(시트 16개)이고, 이후 180일 동안 58명이 퇴사한 기록과 `퇴사라벨` 시트(90일 이내 자발적 퇴사 22명)가 들어 있어 **예측 모드**까지 그대로 돌려볼 수 있습니다. `퇴사라벨` 시트를 지우고 올리면 **진단 모드**가 됩니다. `python tools/make_fixture.py --seed <숫자>`로 다른 난수 버전을 만들 수 있습니다.
 
-픽스처는 난수에 약한 신호 편향을 심은 것이라 처리 경로 검증용이며, 모델 성능 근거로 쓸 수 없습니다.
+난수에 약한 신호 편향을 심은 테스트용 데이터라 처리 경로 검증에만 쓰고, 모델 성능 근거로 쓸 수 없습니다. 테스트 스위트도 이 생성기로 만든 워크북을 씁니다.
 
 ## 하지 않는 것
 
@@ -217,7 +214,7 @@ hr_attrition_plugin/
 ## 개발
 
 ```bash
-python -m pytest tests -q          # 합성 데이터셋이 있으면 전체, 없으면 데이터 의존 테스트 skip
+python -m pytest tests -q          # 외부 데이터 불필요: 테스트가 픽스처 생성기로 워크북을 만들어 씀
 python make_skill_zip.py --check   # zip 두 개 빌드 → 임시 폴더에 풀어 저장소 없이 단독 실행 확인
 ```
 
@@ -231,4 +228,4 @@ python make_skill_zip.py --check   # zip 두 개 빌드 → 임시 폴더에 풀
 
 ## 라이선스
 
-Proprietary — The Prompt Company. 합성 데이터셋의 원천 페르소나는 [Nemotron-Personas-Korea](https://huggingface.co/datasets/nvidia/Nemotron-Personas-Korea) (CC BY 4.0).
+Proprietary — The Prompt Company. 샘플 데이터(`fixtures/`)는 난수로 생성한 가상 데이터이며 실제 인물·회사와 무관합니다.

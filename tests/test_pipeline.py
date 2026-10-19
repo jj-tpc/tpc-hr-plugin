@@ -1,4 +1,4 @@
-"""파이프라인 회귀 테스트 + P0 신뢰성 테스트. 합성 데이터셋 xlsx가 없으면 데이터 의존 테스트는 건너뛴다.
+"""파이프라인 회귀 테스트 + P0 신뢰성 테스트. 외부 데이터 없이 tools/make_fixture.py로 워크북을 만들어 쓴다.
 
     python -m pytest tests -q
 """
@@ -29,21 +29,33 @@ from hrattrition.report import build_summary, load_spec, read_result_workbook, w
 from hrattrition.validation import validate
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET_ROOT = Path(os.environ.get("HR_DATASET_ROOT", "~/project_tpc/offpiste_synthetic_HR_data/output")).expanduser()
-XLSX = sorted(DATASET_ROOT.glob("*/synthetic_hr_*.xlsx")) if DATASET_ROOT.exists() else []
 PREDICT = ROOT / "skill/predict_attrition/scripts/predict_attrition.py"
 DASH = ROOT / "skill/make_dashboard/scripts/make_dashboard.py"
 ENV = {**os.environ, "PYTHONUTF8": "1"}
+N = 186
+sys.path.insert(0, str(ROOT / "tools"))
+from make_fixture import make  # noqa: E402
 
 
 def run(script, *args):
     return subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True, text=True, env=ENV)
 
 
-@pytest.fixture(scope="session", params=XLSX or [pytest.param(None, marks=pytest.mark.skip(reason="합성 데이터셋 xlsx 없음"))],
-                ids=lambda p: p.parent.name if p else "none")
-def workbook(request):
-    ds = load_any(str(request.param))
+def write_fixture(path: Path, with_labels: bool, seed: int = 7) -> Path:
+    sheets = make(N, seed)
+    if not with_labels:
+        sheets.pop("퇴사라벨")
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        for name, df in sheets.items():
+            df.to_excel(w, sheet_name=name, index=False)
+    return path
+
+
+@pytest.fixture(scope="session")
+def workbook(tmp_path_factory):
+    """라벨 시트를 뺀 픽스처 워크북(진단 모드). 라벨이 필요한 테스트는 따로 만든다."""
+    p = write_fixture(tmp_path_factory.mktemp("fx") / "hr_fixture_nolabels.xlsx", with_labels=False)
+    ds = load_any(str(p))
     return ds, build_features(ds)
 
 
@@ -62,8 +74,8 @@ def _roster(n=4, with_id=True):
 
 def test_workbook_loads_as_standard_dataset(workbook):
     ds, f = workbook
-    assert ds.kind == "workbook" and ds.manifest["employee_count"] == len(f) == 100
-    assert ds.manifest["company"]["name"].startswith("(주)") and ds.manifest["as_of_source"].startswith("file:")
+    assert ds.kind == "workbook" and ds.manifest["employee_count"] == len(f) == N
+    assert ds.manifest["company"]["name"].startswith("(주)") and ds.manifest["as_of_source"].startswith("file:") and not ds.has("labels")
     assert ds.has("employees_current") and not ds.has("attendance_daily")
     assert f.attrs["unavailable"] == [] and f.attrs["has_history"]
     for k in FEATURE_DOCS:
@@ -86,7 +98,7 @@ def test_heuristic_scores_schema_and_plain_drivers(workbook):
     res = heuristic_scores(f)
     s = res.scores
     assert list(s.columns) == ["employee_id", "risk_score", "risk_band", "top_drivers", "drivers_plain", "mode"]
-    assert s.risk_score.between(0, 1).all() and 5 <= (s.risk_band == "높음").sum() <= 30
+    assert s.risk_score.between(0, 1).all() and 0.05 * N <= (s.risk_band == "높음").sum() <= 0.3 * N
     assert set(res.metrics["features_used"]) <= set(ALLOWED_FEATURES)
     assert score(f, None, "auto").mode == "heuristic"
 
@@ -131,7 +143,7 @@ def test_result_workbook_roundtrip_and_dashboard(workbook, tmp_path: Path):
     summary = build_summary(f, res, ds.manifest, top_n=10)
     xlsx = write_result_workbook(f, res, summary, ds.manifest, tmp_path)
     f2, s2, meta = read_result_workbook(xlsx)
-    assert len(f2) == 100 and meta["mode"] == "heuristic" and meta["engine_version"] == __version__ and meta["schema"] == C.RESULT_SCHEMA
+    assert len(f2) == N and meta["mode"] == "heuristic" and meta["engine_version"] == __version__ and meta["schema"] == C.RESULT_SCHEMA
     ov = build_overview(f2, meta["manifest"]["as_of"], ds)
     from hrattrition.report import read_result_extras
     extras = read_result_extras(xlsx)
@@ -148,11 +160,11 @@ def test_result_workbook_roundtrip_and_dashboard(workbook, tmp_path: Path):
 
 def test_methodology_steps_produce_artifacts(workbook, tmp_path: Path):
     ds, f_all = workbook
-    q = QuestionSpec.from_args(filters=parse_filters(["직군=개발직"]) if (f_all.job_family == "개발직").any() else parse_filters(["직군=생산직"]))
+    q = QuestionSpec.from_args(filters=parse_filters(["직군=개발직"]))
     q.as_of, q.as_of_source = ds.manifest["as_of"], ds.manifest["as_of_source"]
     assert "진단" in q.answerable_question() and "90일" in q.requested_question() and "예측하지 않는다" in q.answerable_question()
     f, pop = apply_population(f_all, q)
-    assert 0 < pop["after"] < pop["before"] == 100
+    assert 0 < pop["after"] < pop["before"] == N
     prof = profile_dataset(ds, f, set(f_all.employee_id))
     assert prof["employees"] == pop["after"] and any("모집단 제한" in i for i in prof["issues"])
     res = heuristic_scores(f)
@@ -201,7 +213,9 @@ def test_validation_not_evaluable_without_date_columns(tmp_path: Path):
 
 
 def test_leakage_cutoff_excludes_future_and_unparseable_rows(workbook):
-    ds, _ = workbook
+    ds, f0 = workbook
+    base_excl = f0.attrs["excluded_after_as_of"].get("performance_reviews", 0)   # 픽스처 자체에 기준일 이후 평가가 들어 있다
+    assert base_excl > 0
     ds2 = copy.copy(ds)
     ds2.tables = dict(ds.tables)
     rv = ds.tables["performance_reviews"].copy()
@@ -211,7 +225,7 @@ def test_leakage_cutoff_excludes_future_and_unparseable_rows(workbook):
     bad["finalized_at"] = "날짜아님"
     ds2.tables["performance_reviews"] = pd.concat([rv, fut, bad])
     f2 = build_features(ds2)
-    assert f2.attrs["excluded_after_as_of"]["performance_reviews"] == 3 and f2.attrs["unparseable_dates"]["performance_reviews"] == 2
+    assert f2.attrs["excluded_after_as_of"]["performance_reviews"] == base_excl + 3 and f2.attrs["unparseable_dates"]["performance_reviews"] == 2
 
 
 # ---------------- P0-2 입력 선검사 ----------------
@@ -307,13 +321,8 @@ def test_version_single_source():
 
 def test_fixture_with_leavers_runs_predictive_mode(tmp_path: Path):
     """퇴사자 포함 합성 픽스처(186명): 라벨 시트로 예측 모드가 켜지고, 기준일 이후 기록(퇴사 발령·이후 근태·이후 평가)이 제외된다."""
-    sys.path.insert(0, str(ROOT / "tools"))
-    from make_fixture import make
-    sheets = make(186, 7)
-    p = tmp_path / "fx.xlsx"
-    with pd.ExcelWriter(p, engine="openpyxl") as w:
-        for name, df in sheets.items():
-            df.to_excel(w, sheet_name=name, index=False)
+    sheets = make(N, 7)
+    p = write_fixture(tmp_path / "fx.xlsx", with_labels=True)
     lab = sheets["퇴사라벨"]
     assert len(lab) == 186 and lab.left.sum() >= C.MIN_POSITIVES_FOR_MODEL and (lab.left <= lab.left_any_90d).all()
     r = run(PREDICT, "--input", p, "--out", tmp_path / "out")
