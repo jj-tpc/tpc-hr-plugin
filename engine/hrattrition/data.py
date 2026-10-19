@@ -172,16 +172,23 @@ def _manifest_from_workbook(sheets: dict, tables: dict, path: Path) -> dict:
             info[str(k).strip()] = None if pd.isna(v) else str(v).strip()
     company_key = next((k for k in info if k.startswith("회사") or k.lower().startswith("company")), None)
     company = (info[company_key].split(" · ")[0].strip() if company_key and info[company_key] else None) or path.stem
-    as_of = info.get("기준일") or info.get("as_of")
+    # 기준일: 파일의 명시적 값만 쓴다. 없으면 None으로 두고 선검사가 '확인 필요'로 돌려준다(오늘 날짜를 조용히 쓰지 않는다).
+    candidates = {}
+    ov = info.get("기준일") or info.get("as_of")
+    if ov:
+        candidates["개요"] = pd.to_datetime(ov).date().isoformat()
     snap = tables.get("employees_current")
-    if not as_of and snap is not None and "as_of" in snap and snap["as_of"].notna().any():
-        as_of = pd.to_datetime(snap["as_of"]).max().date().isoformat()
-    if not as_of:
-        as_of = date.today().isoformat()
-    as_of = pd.to_datetime(as_of).date().isoformat()
+    if snap is not None and "as_of" in snap and snap["as_of"].notna().any():
+        vals = pd.to_datetime(snap["as_of"], errors="coerce").dropna().dt.date.unique()
+        candidates["employees_current.as_of"] = vals[0].isoformat()
+        if len(vals) > 1:
+            candidates["employees_current.as_of(복수)"] = ", ".join(v.isoformat() for v in vals[:3])
+    distinct = {v for k, v in candidates.items() if "복수" not in k}
+    as_of = next(iter(distinct)) if len(distinct) == 1 else None
+    conflict = None if len(distinct) <= 1 else "; ".join(f"{k}={v}" for k, v in candidates.items())
     n = len(snap) if snap is not None else len(tables.get("employees", []))
-    return dict(company=dict(name=company), as_of=as_of, preset=info.get("프리셋") or path.stem, employee_count=int(n),
-                source_file=path.name)
+    return dict(company=dict(name=company), as_of=as_of, as_of_source=("file:" + next(iter(candidates)) if as_of else None),
+                as_of_conflict=conflict, preset=info.get("프리셋") or path.stem, employee_count=int(n), source_file=path.name)
 
 
 # ---------- 직원 명부 한 장 ----------
@@ -202,14 +209,15 @@ def _map_roster_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 def load_roster_frame(df: pd.DataFrame, source: str, labels: pd.DataFrame | None = None) -> Dataset:
     mapped, mapping = _map_roster_columns(df)
-    if "employee_id" not in mapped:
+    temp_ids = "employee_id" not in mapped
+    if temp_ids:   # 단면 분석에만 허용. 선검사가 ID_TEMPORARY 경고를 낸다
         mapped["employee_id"] = [f"R{i + 1:04d}" for i in range(len(mapped))]
     mapped = coerce(mapped)
     mapped["employee_id"] = mapped["employee_id"].astype(str)
     if "name" not in mapped:
         mapped["name"] = mapped["employee_id"]
-    as_of = date.today()
-    manifest = dict(company=dict(name=Path(source).stem), as_of=as_of.isoformat(), preset="roster",
+    # 명부에는 기준일이 없다. 사용자가 --as-of로 지정해야 하며, 없으면 선검사가 AS_OF_MISSING으로 막는다.
+    manifest = dict(company=dict(name=Path(source).stem), as_of=None, as_of_source=None, preset="roster", temp_ids=temp_ids,
                     employee_count=int(len(mapped)), source_file=Path(source).name, column_mapping=mapping)
     tables = {"roster": mapped}
     if labels is not None:
@@ -221,16 +229,25 @@ def load_roster_frame(df: pd.DataFrame, source: str, labels: pd.DataFrame | None
 
 # ---------- 진입점 ----------
 
-def load_any(path_or_preset: str, dataset_root: Path | None = None) -> Dataset:
+def load_any(path_or_preset: str, dataset_root: Path | None = None, as_of: str | None = None) -> Dataset:
+    """as_of를 주면 사용자가 지정한 기준일로 쓴다(파일 값보다 우선, 출처 'user')."""
     p = Path(path_or_preset).expanduser()
     if p.is_file():
         if p.suffix.lower() in (".xlsx", ".xlsm", ".xls"):
-            return load_workbook(p)
-        if p.suffix.lower() == ".csv":
-            return load_roster_frame(pd.read_csv(p, dtype=object, encoding="utf-8-sig"), str(p))
-        raise ValueError(f"지원하지 않는 파일 형식: {p.suffix}")
-    if (p / "manifest.json").exists():
-        return load_folder(p)
-    if dataset_root and (dataset_root / path_or_preset / "manifest.json").exists():
-        return load_folder(dataset_root / path_or_preset)
-    raise FileNotFoundError(f"입력을 찾을 수 없습니다: {path_or_preset}")
+            ds = load_workbook(p)
+        elif p.suffix.lower() == ".csv":
+            ds = load_roster_frame(pd.read_csv(p, dtype=object, encoding="utf-8-sig"), str(p))
+        else:
+            raise ValueError(f"지원하지 않는 파일 형식: {p.suffix}")
+    elif (p / "manifest.json").exists():
+        ds = load_folder(p)
+    elif dataset_root and (dataset_root / path_or_preset / "manifest.json").exists():
+        ds = load_folder(dataset_root / path_or_preset)
+    else:
+        raise FileNotFoundError(f"입력을 찾을 수 없습니다: {path_or_preset}")
+    if as_of:
+        ds.manifest["as_of"] = pd.to_datetime(as_of).date().isoformat()
+        ds.manifest["as_of_source"] = "user"
+        ds.manifest["as_of_conflict"] = None
+    ds.manifest.setdefault("as_of_source", "file:manifest" if ds.manifest.get("as_of") else None)
+    return ds

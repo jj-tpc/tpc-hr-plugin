@@ -7,6 +7,17 @@ HR 담당자가 claude.ai(채팅·Claude for Work)에 HR 엑셀 한 파일을 �
 | `/predict_attrition` | HR xlsx 한 파일(표준 HR 워크북 또는 직원 명부 한 장) | **퇴사위험_결과.xlsx**(1 질문 정의 · 요약 · 2 데이터 이해/이슈 · 3 가설 · 4 검증 · 5 팀별 확인사항 · 직원별 위험 · 팀별 · 회사 전체 신호 · 조치 제안 · 신호 상세 · 신호 설명 + 기계용 `_data`/`_meta`), summary.json, **analysis_spec.json**(재사용), scores.csv, features.csv, metrics.json |
 | `/make_dashboard` | 퇴사위험_결과.xlsx (+ 원본 HR xlsx 권장) | **dashboard.html**: '인력 현황' 탭(인원 구조·근속·연령·고용형태, 원본이 있으면 월별 근태 추세·설문) + '퇴사 위험' 탭(밴드·분포·팀별·산점도·주요 신호·직원 표·상세) |
 
+## 고도화 진행 상태 (Docs/HANDOFF_HR_RETENTION_UPGRADE_2026-10-19.md)
+
+| 단계 | 상태 | 내용 |
+|---|---|---|
+| P0 신뢰성 | **완료 (v0.4.0)** | 검증 상태 pass/warn/fail/not_evaluable/not_applicable + 근거 ID(실제 검사), 입력 선검사(`precheck.py`, 차단 시 `diagnostics.json`·종료코드 2), 민감 속성 경로 제거·허용 피처 강제·병가/설문 미응답 개인 가중치 제외, 스펙 완전 재현(`analysis_spec.json` v2 + `run_manifest.json`, CLI > 스펙 > 기본값), 버전 단일 원천(`__version__` → pyproject dynamic, zip 빌드 시 plugin.json 일치 검사), 진단/예측 표현 분리 |
+| P1 엑셀 수용력·근거 | 예정 | ingestion / mapping / quality / evidence 분리, 근거 ID로 원본 셀 역추적 |
+| P2 월별 변화 | 예정 | 두 스냅샷 비교, 동일 재직자 변화 vs 구성 변화, 기준 버전 고정 |
+| P3 업무 시트·대화 | 예정 | 이번 달 요약 / 조직별 변화 / 근거 상세 / 실행 관리, 공유용·HR용 분리 |
+| P4 실행 기록 | 예정 | action_id·상태·HR 메모를 다음 달로 이어받기 |
+| P5 예측 모드 | 별도 | 실제 라벨·시간 분리 평가 후에만 활성화 |
+
 ## 방법론: 질문 → 데이터 → 가설 → 검증 → 행동 → 재사용
 
 `/predict_attrition`은 어떤 요청이 와도 여섯 단계로 진행하고 각 단계의 산출물을 남긴다(`skill/predict_attrition/reference/methodology.md`).

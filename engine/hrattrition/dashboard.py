@@ -191,8 +191,8 @@ def build_dashboard(features: pd.DataFrame, scores: pd.DataFrame, metrics: dict,
         about = ("퇴사 위험 탭의 지수는 라벨(퇴사 여부)로 학습한 로지스틱 회귀의 예측 확률이다. 성별·국적·혼인 등 민감 속성은 쓰지 않았다. "
                  f"알고리즘: {metrics.get('algorithm')}.")
     else:
-        metric_label, metric_value = "모드", "규칙 기반 지수"
-        mode_label = "규칙 기반 지수 · 예측 아님"
+        metric_label, metric_value = "분석 모드", "진단(규칙 기반 신호 지수)"
+        mode_label = "진단 모드 · 규칙 기반 신호 지수 · 예측 아님"
         about = ("퇴사 위험 탭의 지수는 보상 밴드 위치·승진 보류·평가·연장근로 추세·설문 몰입도 등에 공개 가중치를 곱한 회사 내 상대 지수(0~1)다. "
                  "예측 확률이 아니며 개인 평가나 인사 조치의 단독 근거로 쓰면 안 된다. 성별·국적·혼인 등 민감 속성은 쓰지 않는다.")
     if unavailable:

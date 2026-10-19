@@ -83,7 +83,10 @@ def _months_between(a, b) -> float:
     return (b.year - a.year) * 12 + (b.month - a.month) + (b.day - a.day) / 30.0
 
 
-def build_features(ds: Dataset, include_sensitive: bool = False) -> pd.DataFrame:
+def build_features(ds: Dataset) -> pd.DataFrame:
+    """민감 속성은 어떤 옵션으로도 싣지 않는다(정책: config.SENSITIVE_COLUMNS)."""
+    if not ds.manifest.get("as_of"):
+        raise ValueError("기준일(as_of)이 없습니다. 선검사(precheck)를 먼저 통과해야 합니다.")
     if ds.kind == "roster":
         return _features_from_roster(ds)
     as_of = pd.Timestamp(ds.as_of)
@@ -99,15 +102,21 @@ def build_features(ds: Dataset, include_sensitive: bool = False) -> pd.DataFrame
     f = pd.DataFrame(index=pd.Index(ids, name="employee_id"))
     unavailable: list[str] = []
     excluded: dict[str, int] = {}
+    unparseable: dict[str, int] = {}
+    date_checked: list[str] = []
 
     def cutoff(df: pd.DataFrame, table: str, date_col: str) -> pd.DataFrame:
-        """기준일 이후 기록 제외(누수 차단) + 제외 건수 기록."""
+        """기준일 이후 기록 제외(누수 차단). 날짜를 읽지 못한 행도 시점을 확인할 수 없으므로 제외하고 건수를 기록한다."""
         if not len(df) or date_col not in df:
             return df
+        date_checked.append(f"{table}.{date_col}")
         d = pd.to_datetime(df[date_col], errors="coerce")
         after = d.notna() & (d > as_of)
+        bad = d.isna() & df[date_col].notna()
         excluded[table] = excluded.get(table, 0) + int(after.sum())
-        return df[~after]
+        if int(bad.sum()):
+            unparseable[table] = unparseable.get(table, 0) + int(bad.sum())
+        return df[~after & ~bad]
 
     def col(df, name, default=np.nan):
         return df[name].reindex(ids) if name in df else pd.Series(default, index=ids)
@@ -115,10 +124,6 @@ def build_features(ds: Dataset, include_sensitive: bool = False) -> pd.DataFrame
     f["name"] = col(snap, "name", None).fillna(col(emp, "name", None))
     for c in CATEGORICAL_INFO:
         f[c] = col(snap, c, None) if c in snap else col(emp, c, None)
-    if include_sensitive:
-        for c in C.SENSITIVE_COLUMNS:
-            if c in emp:
-                f[c] = emp.loc[ids, c]
 
     # ---- 기본 ----
     if "tenure_years" in snap:
@@ -197,7 +202,13 @@ def build_features(ds: Dataset, include_sensitive: bool = False) -> pd.DataFrame
     am = ds["attendance_monthly"]
     if len(am):
         am = am[am.employee_id.isin(ids)].copy()
-        am["m"] = pd.PeriodIndex(am.pay_month.astype(str), freq="M")
+        date_checked.append("attendance_monthly.pay_month")
+        mdt = pd.to_datetime(am.pay_month.astype(str), format="%Y-%m", errors="coerce")
+        bad = mdt.isna()
+        if int(bad.sum()):
+            unparseable["attendance_monthly"] = int(bad.sum())
+        am = am[~bad].copy()
+        am["m"] = pd.to_datetime(am.pay_month.astype(str), format="%Y-%m").dt.to_period("M")
         cur_m = pd.Period(as_of, freq="M")
         excluded["attendance_monthly"] = int((am.m > cur_m).sum())
         am = am[am.m <= cur_m]
@@ -268,6 +279,9 @@ def build_features(ds: Dataset, include_sensitive: bool = False) -> pd.DataFrame
 
     f.attrs["unavailable"] = sorted(set(unavailable))
     f.attrs["excluded_after_as_of"] = excluded
+    f.attrs["unparseable_dates"] = unparseable
+    f.attrs["date_columns_checked"] = date_checked
+    f.attrs["has_history"] = True
     return f.reset_index()
 
 
@@ -325,16 +339,35 @@ def _features_from_roster(ds: Dataset) -> pd.DataFrame:
     if "annual_leave_granted" in r and "annual_leave_used" in r:
         g = pd.to_numeric(r["annual_leave_granted"], errors="coerce").replace(0, np.nan)
         f["leave_usage_rate"] = (pd.to_numeric(r["annual_leave_used"], errors="coerce") / g).clip(0, 1.5)
+    # 명부 모드: 날짜 컬럼이 있으면 기준일 이후 값(미래 입사일 등)을 결측 처리하고 건수를 기록한다
+    excluded, unparseable, checked = {}, {}, []
+    for c in ("hire_date", "last_raise_date", "last_promotion_date"):
+        if c in r:
+            checked.append(f"roster.{c}")
+            d = pd.to_datetime(r[c], errors="coerce")
+            bad = d.isna() & r[c].notna()
+            if int(bad.sum()):
+                unparseable[f"roster.{c}"] = int(bad.sum())
+            if int((d > as_of).sum()):
+                excluded[f"roster.{c}"] = int((d > as_of).sum())
+    if "hire_date" in r:
+        hd = pd.to_datetime(r["hire_date"], errors="coerce")
+        f.loc[(hd > as_of).reindex(f.index).fillna(False).to_numpy(), "tenure_years"] = np.nan
     f.attrs["unavailable"] = [c for c in NUMERIC_FEATURES if f[c].isna().all()]
-    f.attrs["excluded_after_as_of"] = {}
+    f.attrs["excluded_after_as_of"] = excluded
+    f.attrs["unparseable_dates"] = unparseable
+    f.attrs["date_columns_checked"] = checked
+    f.attrs["has_history"] = False
     return f.reset_index()
 
 
-def numeric_matrix(features: pd.DataFrame, include_sensitive: bool = False) -> pd.DataFrame:
-    cols = [c for c in NUMERIC_FEATURES if c in features]
-    X = features.set_index("employee_id")[cols].astype(float)
-    if include_sensitive:
-        for col in C.SENSITIVE_COLUMNS:
-            if col in features:
-                X = X.join(pd.get_dummies(features.set_index("employee_id")[col], prefix=col, dtype=float))
-    return X
+ALLOWED_FEATURES = tuple(k for k in FEATURE_DOCS if k not in C.EXCLUDED_FROM_INDIVIDUAL_WEIGHTS)
+
+
+def numeric_matrix(features: pd.DataFrame) -> pd.DataFrame:
+    """점수 계산용 행렬. 허용 신호(ALLOWED_FEATURES)만 들어가며 민감 속성은 이름이 섞여 있어도 걸러낸다."""
+    leaked = [c for c in features.columns if c in C.SENSITIVE_COLUMNS]
+    if leaked:
+        raise ValueError(f"민감 속성이 피처 테이블에 들어 있습니다: {leaked}")
+    cols = [c for c in ALLOWED_FEATURES if c in features]
+    return features.set_index("employee_id")[cols].astype(float)

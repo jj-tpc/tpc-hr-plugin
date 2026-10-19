@@ -91,11 +91,14 @@ def build_summary(features: pd.DataFrame, res: ScoreResult, manifest: dict, top_
             checks = [PLAIN[c][1] for c in mc.head(2).index if c in PLAIN and mc[c] > 0.1]
             unit_actions.append(dict(division_name=u.division_name, org_unit_name=u.org_unit_name, n=int(u.n), avg_risk=round(float(u.avg_risk), 3),
                                      signals=[PLAIN[c][0] for c in mc.head(2).index if c in PLAIN and mc[c] > 0.1], hr_checks=checks))
+    analysis_mode = (question or {}).get("analysis_mode", "diagnostic")
+    mode_label = {"predictive": "예측 모드(라벨 기반 모델)", "change": "변화 비교 모드", "diagnostic": "진단 모드(규칙 기반 신호 지수 · 예측 아님)"}[analysis_mode]
     return dict(
         question=question, population=population, data_profile=data_profile, hypotheses=hypotheses, validation=validation,
-        unit_actions=unit_actions,
-        company=manifest.get("company", {}).get("name"), as_of=manifest.get("as_of"), source_file=manifest.get("source_file"),
-        n_employees=n, mode=res.mode, mode_label="예측 모델" if res.mode == "model" else "규칙 기반 지수(예측 아님)",
+        unit_actions=unit_actions, analysis_mode=analysis_mode, calc_mode=res.mode,
+        company=manifest.get("company", {}).get("name"), as_of=manifest.get("as_of"), as_of_source=manifest.get("as_of_source"),
+        source_file=manifest.get("source_file"),
+        n_employees=n, mode=res.mode, mode_label=mode_label,
         model_metrics={k: res.metrics[k] for k in ("cv_auc", "positives", "n_train") if k in res.metrics},
         fallback_reason=res.metrics.get("fallback_reason"),
         bands=bands, bands_pct={b: round(100 * c / max(n, 1), 1) for b, c in bands.items()},
@@ -106,9 +109,9 @@ def build_summary(features: pd.DataFrame, res: ScoreResult, manifest: dict, top_
         company_signals=signals, actions=actions,
         unavailable_signals=[FEATURE_DOCS[c][0] for c in unavailable if c in FEATURE_DOCS],
         caveats=[
-            "규칙 기반 모드의 지수는 예측 확률이 아니라 여러 신호를 모은 회사 내 상대 순위다. 개인 평가나 인사 조치의 단독 근거로 쓰면 안 된다."
-            if res.mode != "model" else "예측 확률은 과거 라벨 패턴에 기반하며, 교차검증 AUC와 표본 수를 함께 봐야 한다.",
-            "성별·국적·체류자격·혼인·가족·주거·거주지·병역은 계산에 쓰지 않았다.",
+            "진단 모드의 지수는 예측 확률이 아니라 여러 신호를 모은 회사 내 상대 순위다. 개인 평가나 인사 조치의 단독 근거로 쓰면 안 된다."
+            if res.mode != "model" else "예측 확률은 과거 라벨 패턴에 기반하며, 무작위 교차검증 AUC는 시간 분리 평가가 아니므로 출시 성능 근거가 아니다.",
+            "성별·국적·체류자격·혼인·가족·주거·거주지·병역은 계산에 쓰지 않았다. 병가·설문 미응답은 개인 점수에서 제외했다.",
             "신호는 '확인해 볼 지점'이며 직원 개인의 성향이나 태도를 뜻하지 않는다.",
         ],
     )
@@ -139,16 +142,21 @@ def write_result_workbook(features: pd.DataFrame, res: ScoreResult, summary: dic
                               PLAIN.get(c, ("", ""))[0], PLAIN.get(c, ("", ""))[1]) for c in FEATURE_DOCS],
                             columns=["신호", "계산 방식", "방향", "위험 쪽일 때 표현", "확인 질문"])
     # 기계용 시트: 대시보드 스킬이 그대로 읽는다
-    meta_rows = [("company", summary["company"]), ("as_of", summary["as_of"]), ("source_file", summary.get("source_file") or ""),
-                 ("mode", res.mode), ("metrics_json", json.dumps(res.metrics, ensure_ascii=False)),
+    from . import __version__
+    meta_rows = [("company", summary["company"]), ("as_of", summary["as_of"]), ("as_of_source", summary.get("as_of_source") or ""),
+                 ("source_file", summary.get("source_file") or ""),
+                 ("mode", res.mode), ("analysis_mode", summary.get("analysis_mode", "diagnostic")), ("engine_version", __version__),
+                 ("metrics_json", json.dumps(res.metrics, ensure_ascii=False)),
                  ("unavailable_json", json.dumps(features.attrs.get("unavailable", []), ensure_ascii=False)),
                  ("manifest_json", json.dumps({k: v for k, v in manifest.items() if k != "column_mapping"}, ensure_ascii=False, default=str)),
-                 ("schema", "hr-attrition-result/1")]
+                 ("schema", C.RESULT_SCHEMA)]
     # 방법론 단계별 시트
     q = summary.get("question") or {}
-    question_df = pd.DataFrame([("질문", q.get("sentence", "")), ("대상", q.get("target", "")), ("기간", f"기준일 이후 {q.get('horizon_days', '')}일"),
-                                ("모집단", q.get("population", "")), ("모집단 제한", json.dumps(q.get("filters", {}), ensure_ascii=False)),
-                                ("기준일", q.get("as_of", "")), ("사용자 요청 원문", q.get("raw_prompt", "")),
+    question_df = pd.DataFrame([("분석 모드", summary.get("mode_label", "")),
+                                ("요청한 질문", q.get("requested_question", "")), ("지금 데이터로 답하는 질문", q.get("answerable_question", "")),
+                                ("관심 사건", q.get("target", "")), ("요청 기간", f"기준일 이후 {q.get('horizon_days', '')}일"),
+                                ("기준 모집단", q.get("population", "")), ("모집단 제한", json.dumps(q.get("filters", {}), ensure_ascii=False)),
+                                ("기준일", f"{q.get('as_of', '')} ({summary.get('as_of_source') or '출처 미확인'})"), ("사용자 요청 원문", q.get("raw_prompt", "")),
                                 ("모집단 인원", f"{(summary.get('population') or {}).get('after', summary['n_employees'])}명 / 전체 {(summary.get('population') or {}).get('before', summary['n_employees'])}명")],
                                columns=["항목", "값"])
     prof = summary.get("data_profile") or {}
@@ -165,8 +173,11 @@ def write_result_workbook(features: pd.DataFrame, res: ScoreResult, summary: dic
                                  집중팀=s.get("concentrated_in", ""), 높음그룹동반비율=s.get("share_in_high_pct"), AUC=s.get("auc"), 비고=h.get("note", "")))
     hyp_df = pd.DataFrame(hyp_rows)
     val = summary.get("validation") or {}
-    val_rows = [("체크리스트", f"{c['item']}: {c['result']} — {c['detail']}") for c in val.get("checklist", [])]
+    val_rows = [("종합", f"{val.get('overall_ko', '')}")]
+    val_rows += [("체크리스트", f"[{c['id']}] {c['item']}: {c.get('status_ko', c.get('status'))} — {c['detail']}" + (f" (근거: {', '.join(c['evidence'][:3])})" if c.get("evidence") else ""))
+                 for c in val.get("checklist", [])]
     val_rows += [("기준일 이후 제외", f"{k}: {v}행") for k, v in (val.get("leakage") or {}).get("excluded_rows_by_table", {}).items()]
+    val_rows += [("날짜 해석 실패 제외", f"{k}: {v}행") for k, v in (val.get("leakage") or {}).get("unparseable_rows_by_table", {}).items()]
     val_rows += [("반례", f"[{c['hypothesis']}] {c['type']} {c['count']}건 (예: {', '.join(c['examples'])}) — {c['reading']}") for c in val.get("counterexamples", [])]
     if val.get("sensitivity"):
         val_rows += [("순위 안정성", f"{r['signal']} 제거 시 순위 상관 {r['rank_corr_without']}, 밴드 변경 {r['band_changes']}명") for r in val["sensitivity"]["most_influential"]]
@@ -197,20 +208,60 @@ def write_result_workbook(features: pd.DataFrame, res: ScoreResult, summary: dic
     return p
 
 
-def write_analysis_spec(summary: dict, res: ScoreResult, weights: dict | None, out_dir: Path) -> Path:
-    """6단계 재사용: 같은 질문·설정으로 다시 돌릴 수 있는 스펙(--spec로 입력)."""
+def write_analysis_spec(summary: dict, res: ScoreResult, weights_override: dict | None, mode_requested: str, out_dir: Path) -> Path:
+    """6단계 재사용(P0-4): 계산 설정만 담는다(입력 해시·실행 시각은 run_manifest.json). 같은 입력·스펙·엔진이면 점수·밴드가 같아야 한다."""
     from . import __version__
-    spec = dict(schema="hr-attrition-spec/1", engine_version=__version__, question=summary.get("question"),
-                mode=res.mode, weights_override=weights or {}, weights_effective=res.metrics.get("weights"),
+    spec = dict(schema=C.SPEC_SCHEMA, engine_version=__version__,
+                question={k: v for k, v in (summary.get("question") or {}).items() if k not in ("as_of", "as_of_source")},
+                mode_requested=mode_requested, mode_applied=res.mode, analysis_mode=summary.get("analysis_mode", "diagnostic"),
+                weights_override=weights_override or {}, weights_full=res.metrics.get("weights_full") or res.metrics.get("weights"),
+                tenure_bump=res.metrics.get("tenure_bump"), scale=res.metrics.get("scale"), bands=res.metrics.get("bands"),
+                feature_policy=dict(allowed_features=res.metrics.get("allowed_features"), excluded_from_individual_weights=res.metrics.get("excluded_from_individual_weights"),
+                                    sensitive_never_used=res.metrics.get("sensitive_never_used")),
                 input_conditions=dict(file="HR xlsx 1개(표준 워크북 또는 직원 명부 한 장)", label_sheet="퇴사라벨/labels (선택)",
-                                      sensitive_excluded=list(C.SENSITIVE_COLUMNS)),
-                procedure=["질문 정의", "데이터 이해", "가설 수립·탐색", "검증(반례·누수·산정방식·안정성)", "행동 연결", "재사용 스펙 저장"],
-                validation_criteria=[c["item"] for c in (summary.get("validation") or {}).get("checklist", [])],
-                output_format=dict(workbook=C.RESULT_FILENAME, sheets=["1 질문 정의", "요약", "2 데이터 이해", "2 데이터 이슈", "3 가설", "4 검증", "5 팀별 확인사항",
-                                                                      "직원별 위험", "팀별", "회사 전체 신호", "조치 제안", "신호 상세", "신호 설명", "_data", "_meta"],
-                                   summary="summary.json", dashboard_input="퇴사위험_결과.xlsx(_data/_meta)"))
+                                      as_of="파일의 명시적 기준일 또는 --as-of (오늘 날짜 자동 적용 없음)"),
+                procedure=["질문 정의", "데이터 이해(선검사 포함)", "가설 수립·탐색", "검증(누수·반례·산정방식·안정성·커버리지)", "행동 연결", "재사용 스펙 저장"],
+                validation_criteria=[f"{c['id']} {c['item']}" for c in (summary.get("validation") or {}).get("checklist", [])],
+                output_format=dict(workbook=C.RESULT_FILENAME, result_schema=C.RESULT_SCHEMA, summary="summary.json", run_manifest="run_manifest.json",
+                                   dashboard_input="퇴사위험_결과.xlsx(_data/_meta)"))
     p = out_dir / "analysis_spec.json"
     p.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+    return p
+
+
+def load_spec(path: Path) -> dict:
+    """스펙 로드와 버전 검사. 지원하지 않는 스키마는 오류(조용히 다른 설정으로 돌지 않는다)."""
+    from . import __version__
+    spec = json.loads(Path(path).read_text(encoding="utf-8"))
+    schema = spec.get("schema", "")
+    if schema == "hr-attrition-spec/1":
+        spec = dict(schema=C.SPEC_SCHEMA, engine_version=spec.get("engine_version"), question=spec.get("question"), mode_requested=spec.get("mode", "auto"),
+                    weights_override=spec.get("weights_override") or {}, weights_full=None, migrated_from="hr-attrition-spec/1")
+    elif schema != C.SPEC_SCHEMA:
+        raise ValueError(f"지원하지 않는 스펙 스키마: {schema!r} (지원: {C.SPEC_SCHEMA})")
+    ev = str(spec.get("engine_version") or "")
+    if ev and ev.split(".")[:2] != __version__.split(".")[:2]:
+        raise ValueError(f"스펙 엔진 버전 {ev}은 현재 {__version__}과 호환되지 않습니다. 같은 minor 버전에서 만든 스펙만 재사용할 수 있습니다.")
+    return spec
+
+
+def write_run_manifest(out_dir: Path, inputs: list[Path], spec_path: Path, warnings: list[str], extra: dict | None = None) -> Path:
+    """실행별 값(입력 해시·시각·엔진)과 계산 설정(스펙)을 분리해 기록한다. 해시는 익명화 수단이 아니다."""
+    import hashlib
+    import uuid
+    from datetime import datetime
+    from . import __version__
+
+    def sha(p: Path) -> str:
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    man = dict(run_id=uuid.uuid4().hex[:12], executed_at=datetime.now().astimezone().isoformat(timespec="seconds"), engine_version=__version__,
+               input_hashes={str(p.name): sha(p) for p in inputs if Path(p).is_file()}, spec_hash=sha(spec_path), warnings=warnings, **(extra or {}))
+    p = out_dir / "run_manifest.json"
+    p.write_text(json.dumps(man, ensure_ascii=False, indent=2), encoding="utf-8")
     return p
 
 

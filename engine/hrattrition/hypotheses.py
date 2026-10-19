@@ -75,10 +75,12 @@ def evaluate_hypotheses(features: pd.DataFrame, scores: pd.DataFrame, labels: pd
             sig_rows.append(r)
         if y is not None and aucs:
             best = max(aucs)
-            status = "지지" if best >= 0.6 else "반대" if best <= 0.4 else "불명확"
-            note = f"가장 강한 신호의 단변량 AUC {best:.2f} (양성 {int(y.sum())}명)"
+            status = "지지(단변량)" if best >= 0.6 else "반대(단변량)" if best <= 0.4 else "불명확"
+            note = f"가장 강한 신호의 단변량 AUC {best:.2f} (양성 {int(y.sum())}명). 무작위 교차검증이 아닌 전체 표본 단변량 값이며 시간 분리 검증이 아니다."
+            kind = "검증 결과(라벨 기반)"
         else:
-            status = "탐색(라벨 없음)"
-            note = "라벨이 없어 검증은 못 했다. 신호가 두드러진 인원 비율과 분포만 확인했고, 규칙 지수에는 가중치로 반영된다. 높음 그룹 동반 비율은 지수 구성 요소라 순환 참조다."
-        rows.append(dict(id=hid, hypothesis=text, status=status, signals=sig_rows, note=note))
-    return dict(method="단변량 AUC(라벨 있을 때) / 분포 탐색(라벨 없을 때)", hypotheses=rows)
+            status = "탐색적 증거(라벨 없음)"
+            note = "실제 퇴사 라벨이 없어 검증하지 않았다. 신호가 두드러진 인원 비율과 분포만 확인했고, 규칙 지수에는 가중치로 반영된 사전 가설이다. 높음 그룹 동반 비율은 지수 구성 요소라 순환 참조이므로 근거로 쓰지 않는다."
+            kind = "탐색 결과"
+        rows.append(dict(id=hid, hypothesis=text, status=status, evidence_kind=kind, signals=sig_rows, note=note))
+    return dict(method="단변량 AUC(라벨 있을 때) / 분포 탐색(라벨 없을 때)", evidence_kind="검증 결과" if y is not None else "탐색 결과", hypotheses=rows)

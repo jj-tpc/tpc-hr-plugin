@@ -18,13 +18,35 @@ HEURISTIC_WEIGHTS = {
     "band_position": -1.0, "months_since_raise": 0.6, "last_raise_pct": -0.5,
     "promotion_holds_2y": 0.9, "months_since_promotion": 0.4,
     "last_rating_score": -0.8, "rating_trend": -0.5, "self_manager_gap": 0.6,
-    "ot_hours_m6": 0.6, "ot_trend": 0.6, "late_count_m6": 0.5, "absent_days_m6": 0.5, "sick_days_m6": 0.3,
+    "ot_hours_m6": 0.6, "ot_trend": 0.6, "late_count_m6": 0.5, "absent_days_m6": 0.5,
     "leave_rejected_12m": 0.4, "training_hours_12m": -0.3, "oncall_weeks_12m": 0.3,
     "survey_engagement": -1.0, "survey_pay_perception": -0.7, "survey_workload": -0.6, "survey_enps": -0.8,
-    "survey_nonresponse": 0.5, "is_fixed_term": 0.5, "contract_ending_90d": 0.8, "grade_level": -0.2,
-}
+    "is_fixed_term": 0.5, "contract_ending_90d": 0.8, "grade_level": -0.2,
+}   # 병가(sick_days_m6)·설문 미응답(survey_nonresponse)은 개인 가중치에서 제외(config.EXCLUDED_FROM_INDIVIDUAL_WEIGHTS)
 TENURE_BUMP = {(0.0, 1.0): 0.4, (1.0, 3.0): 0.6, (3.0, 6.0): 0.2}   # 근속 구간별 가산(z 단위)
 SCALE = 0.8   # 시그모이드 계수: '높음'(≥0.7)이 대략 상위 15%, '주의'(≥0.4)가 다음 30% 안팎
+
+
+def check_weights(weights: dict | None) -> dict:
+    """가중치 override 정책 검사: 허용 신호만, 민감 속성·개인 제외 신호는 어떤 경로로도 불가."""
+    if not weights:
+        return {}
+    bad_sensitive = [k for k in weights if k in C.SENSITIVE_COLUMNS or any(k.startswith(s + "_") for s in C.SENSITIVE_COLUMNS)]
+    bad_excluded = [k for k in weights if k in C.EXCLUDED_FROM_INDIVIDUAL_WEIGHTS]
+    unknown = [k for k in weights if k not in FEATURE_DOCS and k not in bad_sensitive]
+    if bad_sensitive:
+        raise ValueError(f"민감 속성은 가중치로 쓸 수 없습니다: {bad_sensitive}")
+    if bad_excluded:
+        raise ValueError(f"개인 위험 가중치에서 제외된 신호입니다(조직 집계에만 사용): {bad_excluded}")
+    if unknown:
+        raise ValueError(f"알 수 없는 신호: {unknown}. 허용 신호: {sorted(k for k in FEATURE_DOCS if k not in C.EXCLUDED_FROM_INDIVIDUAL_WEIGHTS)}")
+    return {k: float(v) for k, v in weights.items()}
+
+
+def policy_dict() -> dict:
+    return dict(allowed_features=[k for k in FEATURE_DOCS if k not in C.EXCLUDED_FROM_INDIVIDUAL_WEIGHTS],
+                excluded_from_individual_weights=list(C.EXCLUDED_FROM_INDIVIDUAL_WEIGHTS), sensitive_never_used=list(C.SENSITIVE_COLUMNS),
+                tenure_bump={f"{lo}-{hi}": v for (lo, hi), v in TENURE_BUMP.items()}, scale=SCALE, bands={b: lo for b, lo in C.RISK_BANDS})
 
 
 @dataclass
@@ -64,7 +86,7 @@ def _frame(X, score, contrib, mode) -> pd.DataFrame:
 
 
 def heuristic_scores(features: pd.DataFrame, weights: dict | None = None) -> ScoreResult:
-    weights = {**HEURISTIC_WEIGHTS, **(weights or {})}
+    weights = {**HEURISTIC_WEIGHTS, **check_weights(weights)}
     X = numeric_matrix(features)
     available = [c for c in X.columns if X[c].notna().any()]
     Z = _zscores(X[available])
@@ -82,14 +104,14 @@ def heuristic_scores(features: pd.DataFrame, weights: dict | None = None) -> Sco
     used = sorted(w.index.tolist())
     skipped = sorted(set(weights) - set(used))
     metrics = dict(mode="heuristic",
-                   note="라벨이 없어 규칙 기반 위험 지수를 계산했다. 예측 확률이 아니라 회사 안에서의 상대 지수(0~1)다.",
-                   weights={k: weights[k] for k in used}, weights_skipped_no_data=skipped,
-                   tenure_bump={f"{lo}-{hi}": v for (lo, hi), v in TENURE_BUMP.items()}, scale=SCALE,
+                   note="라벨이 없어 규칙 기반 신호 지수를 계산했다. 예측 확률이 아니라 회사 안에서의 상대 지수(0~1)다.",
+                   weights={k: weights[k] for k in used}, weights_skipped_no_data=skipped, weights_full=dict(weights),
+                   features_used=sorted(X.columns.tolist()), **policy_dict(),
                    n_employees=int(len(out)), band_counts=out.risk_band.value_counts().to_dict())
     return ScoreResult(out, "heuristic", metrics, None, contrib)
 
 
-def model_scores(features: pd.DataFrame, labels: pd.Series, include_sensitive: bool = False) -> ScoreResult:
+def model_scores(features: pd.DataFrame, labels: pd.Series) -> ScoreResult:
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
@@ -97,7 +119,7 @@ def model_scores(features: pd.DataFrame, labels: pd.Series, include_sensitive: b
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
 
-    X = numeric_matrix(features, include_sensitive)
+    X = numeric_matrix(features)
     X = X[[c for c in X.columns if X[c].notna().any()]]
     y = labels.reindex(X.index)
     train_mask = y.notna()
@@ -120,18 +142,18 @@ def model_scores(features: pd.DataFrame, labels: pd.Series, include_sensitive: b
     metrics = dict(mode="model", algorithm="LogisticRegression(class_weight=balanced, C=0.5) + median impute + standardize",
                    n_train=int(len(yt)), positives=pos, cv_folds=folds, cv_auc=round(auc, 3),
                    coefficients={k: round(float(v), 3) for k, v in coef.sort_values(key=abs, ascending=False).items()},
+                   features_used=sorted(X.columns.tolist()), **policy_dict(),
                    band_counts=out.risk_band.value_counts().to_dict())
     return ScoreResult(out, "model", metrics, pipe, contrib)
 
 
-def score(features: pd.DataFrame, labels: pd.Series | None, mode: str = "auto", include_sensitive: bool = False,
-          weights: dict | None = None) -> ScoreResult:
+def score(features: pd.DataFrame, labels: pd.Series | None, mode: str = "auto", weights: dict | None = None) -> ScoreResult:
     if mode == "heuristic" or (mode == "auto" and labels is None):
         return heuristic_scores(features, weights)
     if labels is None:
         raise ValueError("모델 모드에는 라벨이 필요합니다.")
     try:
-        return model_scores(features, labels, include_sensitive)
+        return model_scores(features, labels)
     except (ValueError, ImportError) as e:
         if mode == "model":
             raise
