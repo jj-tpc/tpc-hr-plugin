@@ -1,0 +1,151 @@
+"""위험 점수: 라벨이 있으면 로지스틱 회귀(교차검증), 없으면 투명한 규칙 기반 지수.
+
+두 모드 모두 결과 스키마가 같다:
+  employee_id, risk_score(0~1), risk_band, top_drivers(기술적 표기), drivers_plain(HR용 평이한 표기), mode
+"""
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from . import config as C
+from .features import FEATURE_DOCS, PLAIN, numeric_matrix
+
+# 규칙 가중치(표준화 z값에 곱한다). 부호는 FEATURE_DOCS의 위험 방향과 같아야 한다(테스트로 확인).
+HEURISTIC_WEIGHTS = {
+    "band_position": -1.0, "months_since_raise": 0.6, "last_raise_pct": -0.5,
+    "promotion_holds_2y": 0.9, "months_since_promotion": 0.4,
+    "last_rating_score": -0.8, "rating_trend": -0.5, "self_manager_gap": 0.6,
+    "ot_hours_m6": 0.6, "ot_trend": 0.6, "late_count_m6": 0.5, "absent_days_m6": 0.5, "sick_days_m6": 0.3,
+    "leave_rejected_12m": 0.4, "training_hours_12m": -0.3, "oncall_weeks_12m": 0.3,
+    "survey_engagement": -1.0, "survey_pay_perception": -0.7, "survey_workload": -0.6, "survey_enps": -0.8,
+    "survey_nonresponse": 0.5, "is_fixed_term": 0.5, "contract_ending_90d": 0.8, "grade_level": -0.2,
+}
+TENURE_BUMP = {(0.0, 1.0): 0.4, (1.0, 3.0): 0.6, (3.0, 6.0): 0.2}   # 근속 구간별 가산(z 단위)
+SCALE = 0.8   # 시그모이드 계수: '높음'(≥0.7)이 대략 상위 15%, '주의'(≥0.4)가 다음 30% 안팎
+
+
+@dataclass
+class ScoreResult:
+    scores: pd.DataFrame
+    mode: str
+    metrics: dict = field(default_factory=dict)
+    model: object = None
+    contrib: pd.DataFrame | None = None
+
+
+def _zscores(X: pd.DataFrame) -> pd.DataFrame:
+    mu, sd = X.mean(), X.std(ddof=0).replace(0, np.nan)
+    return ((X - mu) / sd).fillna(0.0).clip(-3, 3)
+
+
+def _strength(v: float) -> str:
+    return "강함" if v >= 1.5 else "뚜렷" if v >= 0.8 else "약함"
+
+
+def _drivers(contrib: pd.DataFrame, k: int = 3) -> tuple[pd.Series, pd.Series]:
+    def tech(row):
+        pos = row[row > 0.05].sort_values(ascending=False).head(k)
+        return "; ".join(f"{FEATURE_DOCS.get(c, (c,))[0]}(+{v:.1f})" for c, v in pos.items()) or "뚜렷한 요인 없음"
+
+    def plain(row):
+        pos = row[row > 0.05].sort_values(ascending=False).head(k)
+        return "; ".join(f"{PLAIN.get(c, (FEATURE_DOCS.get(c, (c,))[0],))[0]}({_strength(v)})" for c, v in pos.items()) or "뚜렷한 신호 없음"
+    return contrib.apply(tech, axis=1), contrib.apply(plain, axis=1)
+
+
+def _frame(X, score, contrib, mode) -> pd.DataFrame:
+    tech, plain = _drivers(contrib)
+    return pd.DataFrame({"employee_id": X.index, "risk_score": np.round(score, 3),
+                         "risk_band": [C.risk_band(s) for s in score], "top_drivers": tech.to_numpy(),
+                         "drivers_plain": plain.to_numpy(), "mode": mode})
+
+
+def heuristic_scores(features: pd.DataFrame, weights: dict | None = None) -> ScoreResult:
+    weights = {**HEURISTIC_WEIGHTS, **(weights or {})}
+    X = numeric_matrix(features)
+    available = [c for c in X.columns if X[c].notna().any()]
+    Z = _zscores(X[available])
+    w = pd.Series({k: v for k, v in weights.items() if k in Z.columns})
+    contrib = Z[w.index] * w
+    tenure = X["tenure_years"] if "tenure_years" in X else pd.Series(np.nan, index=X.index)
+    bump = pd.Series(0.0, index=X.index)
+    for (lo, hi), v in TENURE_BUMP.items():
+        bump[(tenure >= lo) & (tenure < hi)] = v
+    contrib["tenure_years"] = bump
+    raw = contrib.sum(axis=1)
+    sd = max(float(raw.std(ddof=0)), 1e-9)
+    score = 1 / (1 + np.exp(-(raw / sd) * SCALE))
+    out = _frame(X, score.to_numpy(), contrib, "heuristic")
+    used = sorted(w.index.tolist())
+    skipped = sorted(set(weights) - set(used))
+    metrics = dict(mode="heuristic",
+                   note="라벨이 없어 규칙 기반 위험 지수를 계산했다. 예측 확률이 아니라 회사 안에서의 상대 지수(0~1)다.",
+                   weights={k: weights[k] for k in used}, weights_skipped_no_data=skipped,
+                   tenure_bump={f"{lo}-{hi}": v for (lo, hi), v in TENURE_BUMP.items()}, scale=SCALE,
+                   n_employees=int(len(out)), band_counts=out.risk_band.value_counts().to_dict())
+    return ScoreResult(out, "heuristic", metrics, None, contrib)
+
+
+def model_scores(features: pd.DataFrame, labels: pd.Series, include_sensitive: bool = False) -> ScoreResult:
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    X = numeric_matrix(features, include_sensitive)
+    X = X[[c for c in X.columns if X[c].notna().any()]]
+    y = labels.reindex(X.index)
+    train_mask = y.notna()
+    Xt, yt = X[train_mask], y[train_mask].astype(int)
+    pos, neg = int(yt.sum()), int(len(yt) - yt.sum())
+    if pos < C.MIN_POSITIVES_FOR_MODEL or neg < C.MIN_POSITIVES_FOR_MODEL:
+        raise ValueError(f"모델 학습에는 양성·음성 각 {C.MIN_POSITIVES_FOR_MODEL}명 이상이 필요합니다 (양성 {pos}, 음성 {neg}).")
+    pipe = Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler()),
+                     ("clf", LogisticRegression(class_weight="balanced", C=0.5, max_iter=2000))])
+    folds = min(5, pos, neg)
+    cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=42)
+    cv_prob = cross_val_predict(pipe, Xt, yt, cv=cv, method="predict_proba")[:, 1]
+    auc = float(roc_auc_score(yt, cv_prob))
+    pipe.fit(Xt, yt)
+    prob = pipe.predict_proba(X)[:, 1]
+    coef = pd.Series(pipe.named_steps["clf"].coef_[0], index=X.columns)
+    Xs = pd.DataFrame(pipe.named_steps["scale"].transform(pipe.named_steps["impute"].transform(X)), index=X.index, columns=X.columns)
+    contrib = Xs * coef
+    out = _frame(X, prob, contrib, "model")
+    metrics = dict(mode="model", algorithm="LogisticRegression(class_weight=balanced, C=0.5) + median impute + standardize",
+                   n_train=int(len(yt)), positives=pos, cv_folds=folds, cv_auc=round(auc, 3),
+                   coefficients={k: round(float(v), 3) for k, v in coef.sort_values(key=abs, ascending=False).items()},
+                   band_counts=out.risk_band.value_counts().to_dict())
+    return ScoreResult(out, "model", metrics, pipe, contrib)
+
+
+def score(features: pd.DataFrame, labels: pd.Series | None, mode: str = "auto", include_sensitive: bool = False,
+          weights: dict | None = None) -> ScoreResult:
+    if mode == "heuristic" or (mode == "auto" and labels is None):
+        return heuristic_scores(features, weights)
+    if labels is None:
+        raise ValueError("모델 모드에는 라벨이 필요합니다.")
+    try:
+        return model_scores(features, labels, include_sensitive)
+    except (ValueError, ImportError) as e:
+        if mode == "model":
+            raise
+        res = heuristic_scores(features, weights)
+        res.metrics["fallback_reason"] = f"모델 대신 규칙 지수 사용: {e}"
+        return res
+
+
+def save_result(res: ScoreResult, out_dir: Path):
+    res.scores.to_csv(out_dir / "scores.csv", index=False, encoding="utf-8-sig")
+    (out_dir / "metrics.json").write_text(json.dumps(res.metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    if res.model is not None:
+        try:
+            import joblib
+            joblib.dump(res.model, out_dir / "model.joblib")
+        except Exception:  # noqa: BLE001 - 모델 저장은 선택 사항
+            pass

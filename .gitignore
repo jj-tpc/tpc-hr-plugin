@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+artifacts/
+dist/
+*.egg-info/
+build/
+.claude-plugin/types/

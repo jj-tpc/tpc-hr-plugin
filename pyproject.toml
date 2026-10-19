@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrattrition"
+version = "0.3.0"
+description = "HR xlsx → 퇴사 위험 예측 결과 엑셀 → 현황·위험 대시보드 엔진 (claude.ai 스킬 predict_attrition / make_dashboard에 동봉)"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+model = ["scikit-learn>=1.4"]
+dev = ["pytest>=8", "scikit-learn>=1.4"]
+
+[project.scripts]
+hrattrition = "hrattrition.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "engine" }
+packages = ["hrattrition"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

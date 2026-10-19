@@ -1,0 +1,12 @@
+{
+  "name": "tpc-hr",
+  "description": "The Prompt Company HR 플러그인 모음 (퇴사 위험 예측·대시보드)",
+  "owner": { "name": "The Prompt Company" },
+  "plugins": [
+    {
+      "name": "hr-attrition",
+      "source": "./",
+      "description": "HR 퇴사 위험 예측 + 대시보드 플러그인"
+    }
+  ]
+}
