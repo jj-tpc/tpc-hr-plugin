@@ -265,6 +265,46 @@ def write_run_manifest(out_dir: Path, inputs: list[Path], spec_path: Path, warni
     return p
 
 
+def read_result_extras(path: Path) -> dict:
+    """결과 워크북의 사람용 시트에서 대시보드가 쓰는 부가 정보(검증 체크리스트·가설·팀별 확인사항·회사 신호·조치)를 읽는다."""
+    import re
+    xf = pd.ExcelFile(Path(path), engine="openpyxl")
+    out = dict(checklist=[], hypotheses=[], unit_actions=[], signals=[], actions=[], question={})
+
+    def sheet(name):
+        return pd.read_excel(xf, sheet_name=name, dtype=str).fillna("") if name in xf.sheet_names else None
+
+    v = sheet("4 검증")
+    if v is not None:
+        for _, r in v.iterrows():
+            if r.get("구분") == "체크리스트":
+                m = re.match(r"\[(V\d+)\]\s*(.+?):\s*(통과|경고|실패|평가 불가|해당 없음)\s*—\s*(.*)", str(r.get("내용", "")))
+                if m:
+                    out["checklist"].append(dict(id=m.group(1), item=m.group(2), status_ko=m.group(3), detail=m.group(4)))
+            elif r.get("구분") == "종합":
+                out["overall_ko"] = r.get("내용", "")
+    h = sheet("3 가설")
+    if h is not None and len(h):
+        for hid, g in h.groupby("가설ID", sort=True):
+            first = g.iloc[0]
+            sig = [dict(signal=s["신호"], strong_pct=s.get("비율", ""), concentrated_in=s.get("집중팀", ""), auc=s.get("AUC", "")) for _, s in g.iterrows() if s.get("신호")]
+            out["hypotheses"].append(dict(id=hid, hypothesis=first["가설"], status=first["판정"], signals=sig))
+    u = sheet("5 팀별 확인사항")
+    if u is not None and len(u):
+        out["unit_actions"] = [dict(division=r.get("본부", ""), unit=r.get("팀", ""), n=r.get("인원", ""), avg_risk=r.get("평균 위험", ""),
+                                    signals=r.get("두드러진 신호", ""), checks=r.get("HR이 확인할 사항", "")) for _, r in u.iterrows()]
+    s = sheet("회사 전체 신호")
+    if s is not None and len(s) and "신호" in s:
+        out["signals"] = [dict(signal=r.get("신호", ""), check=r.get("확인할 점", ""), contribution=r.get("평균 기여", "")) for _, r in s.iterrows()]
+    a = sheet("조치 제안")
+    if a is not None and len(a) and "조치 제안" in a:
+        out["actions"] = [dict(category=r.get("범주", ""), action=r.get("조치 제안", ""), signal=r.get("근거 신호", "")) for _, r in a.iterrows()]
+    q = sheet("1 질문 정의")
+    if q is not None and len(q):
+        out["question"] = dict(zip(q["항목"], q["값"]))
+    return out
+
+
 def read_result_workbook(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """예측 결과 워크북 → (features, scores, meta). _data/_meta 시트가 있어야 한다."""
     path = Path(path)

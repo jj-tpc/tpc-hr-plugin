@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as C
-from .features import FEATURE_DOCS, PLAIN, numeric_matrix
+from .features import FEATURE_DOCS, numeric_matrix, phrase_for
 
 # 규칙 가중치(표준화 z값에 곱한다). 부호는 FEATURE_DOCS의 위험 방향과 같아야 한다(테스트로 확인).
 HEURISTIC_WEIGHTS = {
@@ -67,19 +67,24 @@ def _strength(v: float) -> str:
     return "강함" if v >= 1.5 else "뚜렷" if v >= 0.8 else "약함"
 
 
-def _drivers(contrib: pd.DataFrame, k: int = 3) -> tuple[pd.Series, pd.Series]:
+def _drivers(contrib: pd.DataFrame, Z: pd.DataFrame, k: int = 3) -> tuple[pd.Series, pd.Series]:
+    """위험 기여(contrib>0)가 큰 신호 상위 k. 평이한 표현은 기여 부호가 아니라 값(z)의 방향으로 고른다."""
     def tech(row):
         pos = row[row > 0.05].sort_values(ascending=False).head(k)
         return "; ".join(f"{FEATURE_DOCS.get(c, (c,))[0]}(+{v:.1f})" for c, v in pos.items()) or "뚜렷한 요인 없음"
 
     def plain(row):
         pos = row[row > 0.05].sort_values(ascending=False).head(k)
-        return "; ".join(f"{PLAIN.get(c, (FEATURE_DOCS.get(c, (c,))[0],))[0]}({_strength(v)})" for c, v in pos.items()) or "뚜렷한 신호 없음"
+        parts = []
+        for c, v in pos.items():
+            z = float(Z.at[row.name, c]) if (c in Z.columns and row.name in Z.index) else 0.0
+            parts.append(f"{phrase_for(c, z)}({_strength(v)})")
+        return "; ".join(parts) or "뚜렷한 신호 없음"
     return contrib.apply(tech, axis=1), contrib.apply(plain, axis=1)
 
 
-def _frame(X, score, contrib, mode) -> pd.DataFrame:
-    tech, plain = _drivers(contrib)
+def _frame(X, score, contrib, mode, Z) -> pd.DataFrame:
+    tech, plain = _drivers(contrib, Z)
     return pd.DataFrame({"employee_id": X.index, "risk_score": np.round(score, 3),
                          "risk_band": [C.risk_band(s) for s in score], "top_drivers": tech.to_numpy(),
                          "drivers_plain": plain.to_numpy(), "mode": mode})
@@ -100,7 +105,8 @@ def heuristic_scores(features: pd.DataFrame, weights: dict | None = None) -> Sco
     raw = contrib.sum(axis=1)
     sd = max(float(raw.std(ddof=0)), 1e-9)
     score = 1 / (1 + np.exp(-(raw / sd) * SCALE))
-    out = _frame(X, score.to_numpy(), contrib, "heuristic")
+    Zall = _zscores(X[available])
+    out = _frame(X, score.to_numpy(), contrib, "heuristic", Zall)
     used = sorted(w.index.tolist())
     skipped = sorted(set(weights) - set(used))
     metrics = dict(mode="heuristic",
@@ -138,7 +144,7 @@ def model_scores(features: pd.DataFrame, labels: pd.Series) -> ScoreResult:
     coef = pd.Series(pipe.named_steps["clf"].coef_[0], index=X.columns)
     Xs = pd.DataFrame(pipe.named_steps["scale"].transform(pipe.named_steps["impute"].transform(X)), index=X.index, columns=X.columns)
     contrib = Xs * coef
-    out = _frame(X, prob, contrib, "model")
+    out = _frame(X, prob, contrib, "model", Xs)
     metrics = dict(mode="model", algorithm="LogisticRegression(class_weight=balanced, C=0.5) + median impute + standardize",
                    n_train=int(len(yt)), positives=pos, cv_folds=folds, cv_auc=round(auc, 3),
                    coefficients={k: round(float(v), 3) for k, v in coef.sort_values(key=abs, ascending=False).items()},

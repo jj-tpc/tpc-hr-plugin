@@ -9,8 +9,9 @@ DEFAULT_OUT_ROOT = REPO_ROOT / "artifacts"
 # 민감 속성: 어떤 경로(규칙·모델·스펙 override)로도 점수에 들어갈 수 없다. 피처 테이블에도 싣지 않는다.
 SENSITIVE_COLUMNS = ("sex", "nationality", "residence_status", "marital_status", "family_type", "housing_type",
                      "residence_district", "korean_proficiency", "military_service", "birth_date", "age_group")
-# 개인 위험 가중치에서 제외하는 신호(조직 집계·현황에는 쓸 수 있다): 건강·소통 참여도로 개인을 추론하지 않기 위해
-EXCLUDED_FROM_INDIVIDUAL_WEIGHTS = ("sick_days_m6", "survey_nonresponse")
+# 개인 위험 가중치·모델에서 제외하는 신호(조직 집계·현황에는 쓸 수 있다):
+#   병가·설문 미응답 = 건강·소통 참여도로 개인을 추론하지 않기 위해, 나이 = 연령 차별 소지(현황 연령대 차트에만 사용)
+EXCLUDED_FROM_INDIVIDUAL_WEIGHTS = ("sick_days_m6", "survey_nonresponse", "age")
 
 RATING_SCORE = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1}
 RECENT_MONTHS = 6          # 근태 최근 구간

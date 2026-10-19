@@ -76,6 +76,34 @@ PLAIN = {
     "survey_nonresponse": ("설문 미응답", "조직 소통 참여도"),
     "tenure_years": ("이직이 잦은 근속 구간(1~3년)", "초기 적응·경력 계획"),
 }
+# 값이 '안전 쪽'으로 치우쳤을 때의 표현(위험 방향 반대). 방향 0 신호는 값이 높을 때/낮을 때 표현을 각각 둔다.
+SAFE_PHRASE = {
+    "grade_level": "직급이 높은 편", "is_leader": "보직자", "is_fixed_term": "정규직", "contract_ending_90d": "계약 만료 여유",
+    "base_annual_krw10k": "연봉이 높은 편", "band_position": "보상 밴드 상단", "months_since_raise": "최근 인상 있음", "last_raise_pct": "인상률 높음",
+    "promotion_holds_2y": "승진 보류 없음", "months_since_promotion": "최근 승진", "last_rating_score": "최근 평가 높음", "rating_trend": "평가 상승",
+    "self_manager_gap": "자기평가와 확정등급 일치", "ot_hours_m6": "연장근로 적음", "ot_trend": "연장근로 감소 추세", "late_count_m6": "지각 없음",
+    "absent_days_m6": "결근 없음", "sick_days_m6": "병가 적음", "leave_rejected_12m": "휴가 반려 없음", "training_hours_12m": "교육 참여 많음",
+    "oncall_weeks_12m": "온콜 부담 적음", "survey_engagement": "설문 몰입도 높음", "survey_pay_perception": "보상이 적절하다고 응답",
+    "survey_workload": "워라밸 응답 높음", "survey_enps": "회사 추천 의향 높음", "survey_nonresponse": "설문 응답함",
+}
+NEUTRAL_PHRASE = {   # 방향 0 신호: (값 높을 때, 값 낮을 때)
+    "tenure_years": ("근속이 긴 편", "근속이 짧은 편(1~3년 구간)"), "age": ("연령대 높은 편", "연령대 낮은 편"),
+    "on_leave": ("휴직 중", "재직"), "transfers_count": ("전보 경험 많음", "전보 없음"), "leave_usage_rate": ("연차 사용률 높음", "연차 사용률 낮음"),
+}
+
+
+def phrase_for(c: str, z: float) -> str:
+    """표준화 값 z의 부호에 맞는 평이한 표현. 모델 모드처럼 기여 부호가 가설 방향과 다를 때도 값 자체를 바르게 설명한다."""
+    d = FEATURE_DOCS.get(c, ("", "", 0))[2]
+    if d == 0:
+        hi, lo = NEUTRAL_PHRASE.get(c, (FEATURE_DOCS.get(c, (c,))[0] + " 높음", FEATURE_DOCS.get(c, (c,))[0] + " 낮음"))
+        return hi if z >= 0 else lo
+    risky = (z >= 0) == (d > 0)
+    return PLAIN.get(c, (FEATURE_DOCS.get(c, (c,))[0],))[0] if risky else SAFE_PHRASE.get(c, FEATURE_DOCS.get(c, (c,))[0] + " 양호")
+
+
+def check_question(c: str) -> str:
+    return PLAIN.get(c, ("", ""))[1] if len(PLAIN.get(c, ())) > 1 else ""
 
 
 def _months_between(a, b) -> float:

@@ -28,7 +28,7 @@ HR 담당자는 데이터 과학자가 아니고, 가진 것은 인사 시스템
 | 스킬 | 입력 | 출력 |
 |---|---|---|
 | **[`/predict_attrition`](./skill/predict_attrition/SKILL.md)** | HR xlsx 한 파일 | `퇴사위험_결과.xlsx` + 여섯 단계 한 줄 요약, 핵심 발견, HR이 확인할 일 |
-| **[`/make_dashboard`](./skill/make_dashboard/SKILL.md)** | 결과 xlsx (+ 원본 xlsx) | `dashboard.html` — 인력 현황 탭 + 퇴사 위험 탭 |
+| **[`/make_dashboard`](./skill/make_dashboard/SKILL.md)** | 결과 xlsx (+ 원본 xlsx) | `dashboard.html` — HR 리스크 터미널: 조직 트리 연동 필터, 신호 보드, 팀×신호 히트맵, 워치리스트(스파크라인), 가설·검증·확인사항, 직원 드로어. 외부 리소스 없음 |
 
 Claude Code에서는 분석가 서브에이전트 [`hr-analyst`](./agents/hr-analyst.md)도 함께 설치됩니다.
 

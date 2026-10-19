@@ -133,8 +133,12 @@ def test_result_workbook_roundtrip_and_dashboard(workbook, tmp_path: Path):
     f2, s2, meta = read_result_workbook(xlsx)
     assert len(f2) == 100 and meta["mode"] == "heuristic" and meta["engine_version"] == __version__ and meta["schema"] == C.RESULT_SCHEMA
     ov = build_overview(f2, meta["manifest"]["as_of"], ds)
-    html = build_dashboard(f2, s2, meta["metrics"], meta["manifest"], ov, tmp_path / "d.html", meta["unavailable"]).read_text(encoding="utf-8")
-    assert "인력 현황" in html and "퇴사 위험" in html and "__DATA__" not in html
+    from hrattrition.report import read_result_extras
+    extras = read_result_extras(xlsx)
+    html = build_dashboard(f2, s2, meta["metrics"], meta["manifest"], ov, tmp_path / "d.html", meta["unavailable"], extras).read_text(encoding="utf-8")
+    assert "신호 보드" in html and "히트맵" in html and "워치리스트" in html and "__DATA__" not in html and "__EXTRAS__" not in html
+    assert "cdnjs" not in html and "<script src=" not in html   # 외부 리소스 없음(오프라인에서도 열림)
+    json.loads(html[html.index("const DATA=") + 11: html.index(", DOCS=")])
 
 
 # ---------------- 방법론 ----------------

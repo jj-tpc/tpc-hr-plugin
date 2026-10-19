@@ -27,7 +27,8 @@ from .overview import build_overview
 from .precheck import blocking, precheck, summarize
 from .profile import profile_dataset
 from .question import QuestionSpec, apply_population, parse_filters
-from .report import build_summary, load_spec, read_result_workbook, write_analysis_spec, write_result_workbook, write_run_manifest, write_summary
+from .report import (build_summary, load_spec, read_result_extras, read_result_workbook, write_analysis_spec, write_result_workbook,
+                     write_run_manifest, write_summary)
 from .validation import validate
 
 DATASET_ROOT = Path(os.environ.get("HR_DATASET_ROOT", "~/project_tpc/offpiste_synthetic_HR_data/output")).expanduser()
@@ -160,8 +161,9 @@ def dashboard(args) -> Path | None:
             print(f"[data] 원본 데이터를 읽지 못해 결과 파일만으로 현황을 만듭니다: {e}")
     manifest = meta["manifest"]
     ov = build_overview(features, str(manifest.get("as_of")), raw)
-    p = build_dashboard(features, scores, meta["metrics"], manifest, ov, out / "dashboard.html", meta["unavailable"])
-    print(f"[dashboard] {p} · 인력 현황 탭(원본 {'포함' if raw else '없음'}) + 퇴사 위험 탭")
+    extras = read_result_extras(result)
+    p = build_dashboard(features, scores, meta["metrics"], manifest, ov, out / "dashboard.html", meta["unavailable"], extras)
+    print(f"[dashboard] {p} · 터미널 레이아웃 (원본 {'포함: 월별 추세·스파크라인' if raw else '없음'})")
     if args.open:
         if sys.platform == "win32":
             os.startfile(p)  # noqa: S606

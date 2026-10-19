@@ -51,18 +51,29 @@ def build_overview(features: pd.DataFrame, as_of: str, raw: Dataset | None = Non
 def _from_raw(ds: Dataset, f: pd.DataFrame) -> dict:
     out: dict = {}
     ids = set(f.employee_id.astype(str))
+    as_of_m = str(pd.Period(pd.Timestamp(ds.as_of), freq="M")) if ds.manifest.get("as_of") else None
     am = ds["attendance_monthly"]
     if len(am):
         am = am[am.employee_id.astype(str).isin(ids)].copy()
+        am["pay_month"] = am.pay_month.astype(str)
+        if as_of_m:
+            am = am[am.pay_month <= as_of_m]   # 현황도 기준일 이후 월은 쓰지 않는다(예측 탭과 같은 시점 규칙)
         for c in ("overtime_hours", "late_count", "absent_days", "recognized_hours"):
             am[c] = pd.to_numeric(am[c], errors="coerce")
-        g = am.groupby(am.pay_month.astype(str)).agg(overtime=("overtime_hours", "mean"), late=("late_count", "sum"),
-                                                     absent=("absent_days", "sum"), hours=("recognized_hours", "mean")).sort_index()
+        g = am.groupby("pay_month").agg(overtime=("overtime_hours", "mean"), late=("late_count", "sum"), absent=("absent_days", "sum"),
+                                        hours=("recognized_hours", "mean"), n=("employee_id", "nunique")).sort_index()
         out["monthly"] = dict(labels=g.index.tolist(), overtime=[round(float(v), 1) for v in g.overtime.fillna(0)],
                               late=[int(v) for v in g.late.fillna(0)], absent=[int(v) for v in g.absent.fillna(0)],
-                              hours=[round(float(v), 1) for v in g.hours.fillna(0)])
+                              hours=[round(float(v), 1) for v in g.hours.fillna(0)], n=[int(v) for v in g.n], cutoff=as_of_m)
+        # 직원별 최근 6개월 연장근로 스파크라인
+        last6 = sorted(am.pay_month.unique())[-6:]
+        piv = am[am.pay_month.isin(last6)].pivot_table(index="employee_id", columns="pay_month", values="overtime_hours", aggfunc="mean")
+        out["spark"] = {str(i): [None if pd.isna(v) else round(float(v), 1) for v in row.reindex(last6)] for i, row in piv.iterrows()}
+        out["spark_months"] = list(last6)
     sv, sq, sa = ds["surveys"], ds["survey_questions"], ds["survey_answers"]
     if len(sv) and len(sq) and len(sa):
+        if ds.manifest.get("as_of") and "closed_at" in sv:
+            sv = sv[pd.to_datetime(sv.closed_at, errors="coerce") <= pd.Timestamp(ds.as_of)]
         rows = []
         for _, s in sv.sort_values("closed_at").iterrows():
             q = sq[sq.survey_id == s.survey_id].set_index("question_id")
