@@ -61,6 +61,15 @@ python make_skill_zip.py
 `dist/predict_attrition.zip`, `dist/make_dashboard.zip`을 claude.ai → 설정 → 기능(Capabilities) → Skills에 각각 업로드한다. Claude for Work는 관리자가 조직에 배포한다.
 샌드박스 요구: pandas·numpy·openpyxl(모델 모드만 scikit-learn). 두 zip 모두 엔진을 동봉하므로 서로 없어도 동작한다(`/make_dashboard`는 결과 엑셀이 없으면 예측부터 수행).
 
+## 테스트 픽스처: 퇴사자 포함 186명 (`fixtures/hr_fixture_186.xlsx`)
+
+```bash
+python tools/make_fixture.py --n 186 --seed 7      # 재생성
+python skill/predict_attrition/scripts/predict_attrition.py --input fixtures/hr_fixture_186.xlsx --out artifacts/fixture_186
+```
+
+기준일 2026-04-30 시점 재직자 186명을 난수로 만들고, 이후 180일 동안 약 58명이 퇴사한다(자발적/비자발적/계약만료). `퇴사라벨` 시트의 `left`는 기본 질문 정의와 같은 "90일 이내 자발적 퇴사"(약 23명)이고 `left_any_90d`, `left_any_180d`, `left_date`, `left_type`도 들어 있다. 퇴사자 쪽에 약한 신호 편향(몰입 낮음·밴드 하단·연장근로 증가·평가 하락·승진 보류·근속 1~3년)을 심었고, 기준일 이후 기록(퇴사 발령·이후 월 근태·이후 확정 평가)을 일부 포함해 누수 차단(V2)이 실제로 동작하는지 볼 수 있다. **실제 데이터가 아니므로 모델 성능 근거로 쓰면 안 된다**(P5의 처리 경로 검증용).
+
 ## 로컬 실행
 
 ```bash

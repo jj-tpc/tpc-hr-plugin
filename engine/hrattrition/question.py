@@ -38,7 +38,8 @@ class QuestionSpec:
 
     def answerable_question(self) -> str:
         if self.analysis_mode == "predictive":
-            return f"기준일 {self.as_of} 이후 {self.horizon_days}일 이내 {self.target} 확률을 {self.population_text()}에 대해 예측한다(검증된 라벨 기반)."
+            return (f"기준일 {self.as_of} 이후 {self.horizon_days}일 이내 {self.target} 확률을 {self.population_text()}에 대해 예측한다"
+                    f"(제공된 라벨로 학습한 모델. 라벨 정의가 이 질문과 같은지 확인 필요, 무작위 교차검증이라 시간 분리 검증은 아님).")
         if self.analysis_mode == "change":
             return f"두 기준일 사이 {self.population_text()}의 퇴사 관련 신호 변화를 비교한다."
         return (f"기준일 {self.as_of or '(파일 기준)'} 현재 {self.population_text()}의 퇴사 관련 신호를 진단한다. "

@@ -298,6 +298,29 @@ def test_version_single_source():
     assert "dynamic" in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
+def test_fixture_with_leavers_runs_predictive_mode(tmp_path: Path):
+    """퇴사자 포함 합성 픽스처(186명): 라벨 시트로 예측 모드가 켜지고, 기준일 이후 기록(퇴사 발령·이후 근태·이후 평가)이 제외된다."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from make_fixture import make
+    sheets = make(186, 7)
+    p = tmp_path / "fx.xlsx"
+    with pd.ExcelWriter(p, engine="openpyxl") as w:
+        for name, df in sheets.items():
+            df.to_excel(w, sheet_name=name, index=False)
+    lab = sheets["퇴사라벨"]
+    assert len(lab) == 186 and lab.left.sum() >= C.MIN_POSITIVES_FOR_MODEL and (lab.left <= lab.left_any_90d).all()
+    r = run(PREDICT, "--input", p, "--out", tmp_path / "out")
+    assert r.returncode == 0, r.stderr
+    s = json.loads((tmp_path / "out" / "summary.json").read_text(encoding="utf-8"))
+    assert s["analysis_mode"] == "predictive" and s["calc_mode"] == "model" and 0.5 <= s["model_metrics"]["cv_auc"] <= 1.0
+    leak = s["validation"]["leakage"]["excluded_rows_by_table"]
+    assert leak["personnel_actions"] == int(lab.left_any_180d.sum()) and leak["attendance_monthly"] > 0 and leak["performance_reviews"] > 0
+    by_id = {c["id"]: c["status"] for c in s["validation"]["checklist"]}
+    assert by_id["V2"] == "pass" and by_id["V6"] == "not_applicable" and by_id["V9"] == "warn"
+    assert s["hypotheses"]["evidence_kind"] == "검증 결과" and all(h["status"] in {"지지(단변량)", "반대(단변량)", "불명확", "데이터 없음"} for h in s["hypotheses"]["hypotheses"])
+    assert "시간 분리 검증은 아님" in s["question"]["answerable_question"]
+
+
 def test_entry_scripts_run_end_to_end(workbook, tmp_path: Path):
     ds, _ = workbook
     r = run(PREDICT, "--input", ds.source, "--out", tmp_path)
