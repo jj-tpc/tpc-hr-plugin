@@ -130,8 +130,12 @@ def validate(features: pd.DataFrame, res, labels: pd.Series | None, as_of: str, 
     # V7 커버리지
     coverage = [dict(signal=FEATURE_DOCS[c][0], feature=c, coverage_pct=round(100 * float(f[c].notna().mean()), 1)) for c in ALLOWED_FEATURES if c in f]
     low_cov = [r for r in coverage if r["coverage_pct"] < 50 and r["feature"] in used]
-    checks.append(_check("V7", "사용 신호 커버리지", "warn" if low_cov else "pass",
-                         ("50% 미만 신호: " + ", ".join(f"{r['signal']} {r['coverage_pct']}%" for r in low_cov)) if low_cov else "사용 신호 모두 커버리지 50% 이상", ["EV-COV"]))
+    zero = [r for r in low_cov if r["coverage_pct"] == 0]
+    partial = [r for r in low_cov if r["coverage_pct"] > 0]
+    detail = "사용 신호 모두 커버리지 50% 이상" if not low_cov else \
+        (f"데이터 없음 {len(zero)}개" if zero else "") + ("; " if zero and partial else "") + \
+        ("50% 미만: " + ", ".join(f"{r['signal']} {r['coverage_pct']}%" for r in partial[:5]) + (f" 외 {len(partial) - 5}개" if len(partial) > 5 else "") if partial else "")
+    checks.append(_check("V7", "사용 신호 커버리지", "warn" if low_cov else "pass", detail, ["EV-COV"]))
 
     # V8 입력 선검사 결과 반영
     pre = precheck_issues or []

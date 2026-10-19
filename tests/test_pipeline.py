@@ -139,6 +139,9 @@ def test_result_workbook_roundtrip_and_dashboard(workbook, tmp_path: Path):
     assert "신호 보드" in html and "히트맵" in html and "워치리스트" in html and "__DATA__" not in html and "__EXTRAS__" not in html
     assert "cdnjs" not in html and "<script src=" not in html   # 외부 리소스 없음(오프라인에서도 열림)
     json.loads(html[html.index("const DATA=") + 11: html.index(", DOCS=")])
+    # 공유용: 이름·사번이 파일에서 제거되고 가명으로 바뀐다
+    share = build_dashboard(f2, s2, meta["metrics"], meta["manifest"], ov, tmp_path / "s.html", meta["unavailable"], extras, share=True).read_text(encoding="utf-8")
+    assert not any(n in share for n in f2["name"].head(20)) and not any(i in share for i in f2["employee_id"].head(20)) and "P-001" in share
 
 
 # ---------------- 방법론 ----------------

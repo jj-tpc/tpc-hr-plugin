@@ -164,6 +164,9 @@ def dashboard(args) -> Path | None:
     extras = read_result_extras(result)
     p = build_dashboard(features, scores, meta["metrics"], manifest, ov, out / "dashboard.html", meta["unavailable"], extras)
     print(f"[dashboard] {p} · 터미널 레이아웃 (원본 {'포함: 월별 추세·스파크라인' if raw else '없음'})")
+    if getattr(args, "share", False):
+        ps = build_dashboard(features, scores, meta["metrics"], manifest, ov, out / "dashboard_share.html", meta["unavailable"], extras, share=True)
+        print(f"[dashboard] {ps} · 공유용(이름·사번 제거, 가명 P-001…)")
     if args.open:
         if sys.platform == "win32":
             os.startfile(p)  # noqa: S606
@@ -183,10 +186,12 @@ def main(argv=None):
     p2.add_argument("--result", type=Path, help="/predict_attrition이 만든 퇴사위험_결과.xlsx")
     p2.add_argument("--out", type=Path)
     p2.add_argument("--open", action="store_true")
+    p2.add_argument("--share", action="store_true", help="공유용 dashboard_share.html도 생성(이름·사번 제거)")
     p3 = sub.add_parser("run", help="predict + dashboard")
     _add_predict_args(p3)
     p3.add_argument("--out", type=Path)
     p3.add_argument("--open", action="store_true")
+    p3.add_argument("--share", action="store_true", help="공유용 dashboard_share.html도 생성(이름·사번 제거)")
     args = ap.parse_args(argv)
 
     if args.cmd == "predict":

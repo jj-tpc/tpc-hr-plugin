@@ -229,7 +229,8 @@ function renderRail(){
   $('#heroV').textContent=hi; $('#heroN').textContent=`/ ${R.length}`; $('#heroSub').textContent=`주의 ${R.filter(r=>r.risk_band==='주의').length} · 낮음 ${R.filter(r=>r.risk_band==='낮음').length} · 평균 ${fmt(R.reduce((a,r)=>a+r.risk_score,0)/R.length)}`;
   $('#allN').textContent=R.length;
   const divs=Object.entries(by).map(([d,units])=>{const rows=Object.values(units).flat();return [d,units,rows]}).sort((a,b)=>avg(b[2])-avg(a[2]));
-  $('#tree').innerHTML=divs.map(([d,units,rows])=>`<li class="div ${state.div===d&&!state.unit?'sel':''}" data-div="${esc(d)}"><span>${esc(d)}</span><span class="n num">${rows.length}</span><span class="hi num">${rows.filter(r=>r.risk_band==='높음').length||''}</span><span class="cell" style="background:${riskColor(avg(rows))}" title="평균 ${fmt(avg(rows))}"></span></li>`+
+  const single=divs.length===1;   // 본부 구분이 없는 명부: 본부 행을 생략하고 팀만
+  $('#tree').innerHTML=divs.map(([d,units,rows])=>(single?'':`<li class="div ${state.div===d&&!state.unit?'sel':''}" data-div="${esc(d)}"><span>${esc(d)}</span><span class="n num">${rows.length}</span><span class="hi num">${rows.filter(r=>r.risk_band==='높음').length||''}</span><span class="cell" style="background:${riskColor(avg(rows))}" title="평균 ${fmt(avg(rows))}"></span></li>`)+
     Object.entries(units).sort((a,b)=>avg(b[1])-avg(a[1])).map(([u,rows])=>`<li class="unit ${state.unit===u?'sel':''}" data-div="${esc(d)}" data-unit="${esc(u)}"><span>${esc(u)}</span><span class="n num">${rows.length}</span><span class="hi num">${rows.filter(r=>r.risk_band==='높음').length||''}</span><span class="cell" style="background:${riskColor(avg(rows))}" title="평균 ${fmt(avg(rows))}"></span></li>`).join('')).join('');
   $('#allOrg').classList.toggle('sel',!state.div&&!state.unit);
   document.querySelectorAll('#tree li').forEach(li=>li.onclick=()=>{state.div=li.dataset.div;state.unit=li.dataset.unit||null;renderAll()});
@@ -245,12 +246,14 @@ function renderSignals(){
   const rows=visible(); const scoped=!!(state.div||state.unit||state.band||state.q.trim());
   $('#sigScope').textContent=`${scopeLabel()} ${rows.length}명 · 평균 / ${scoped?'회사 대비 σ':'σ(전체 선택 시 생략)'} / 분포 / 높음군 z`;
   const hi=rows.filter(r=>r.risk_band==='높음');
-  const items=FEATS.map(k=>{const vals=rows.map(r=>r[k]).filter(v=>v!==null&&v!==undefined);if(!vals.length)return null;const mean=vals.reduce((a,b)=>a+b,0)/vals.length;const dz=STATS[k].sd?(mean-STATS[k].mean)/STATS[k].sd:0;
-    const hz=hi.length?hi.reduce((a,r)=>a+adj(k,(Z[r.employee_id]||{})[k]||0),0)/hi.length:null;return {k,mean,dz:adj(k,dz),hz,vals}}).filter(Boolean).sort((a,b)=>(b.hz??-9)-(a.hz??-9));
+  const items=FEATS.filter(k=>STATS[k].sd>0).map(k=>{const vals=rows.map(r=>r[k]).filter(v=>v!==null&&v!==undefined);if(!vals.length)return null;const mean=vals.reduce((a,b)=>a+b,0)/vals.length;const dz=STATS[k].sd?(mean-STATS[k].mean)/STATS[k].sd:0;
+    const ref=DIR[k]===0;   // 참고 신호: 위험 방향이 없으므로 높음군 z는 부호 없이 보여주고 맨 아래로
+    const hz=hi.length?hi.reduce((a,r)=>a+(ref?((Z[r.employee_id]||{})[k]||0):adj(k,(Z[r.employee_id]||{})[k]||0)),0)/hi.length:null;return {k,mean,dz:ref?dz:adj(k,dz),hz,vals,ref}}).filter(Boolean).sort((a,b)=>(a.ref-b.ref)||((b.hz??-9)-(a.hz??-9)));
   $('#sigBoard').innerHTML=`<div class="sig head"><span>신호</span><span class="r">평균</span><span class="r">σ(위험+)</span><span></span><span class="r">높음군 z</span></div>`+items.map(it=>{
     const c=it.dz>0.5?'var(--crit)':it.dz<-0.5?'var(--accent)':'var(--ink-2)';
     const dis=COEF[it.k]!==undefined&&Math.sign(COEF[it.k])!==DIR[it.k];
-    return `<div class="sig" data-k="${it.k}"><span class="dim" title="${esc(DOCS[it.k][1])}${dis?' · 모델 계수 부호('+(COEF[it.k]>0?'+':'−')+')가 가설 방향과 다름: 표본이 작을 때 흔하며, 색은 가설 방향 기준':''}">${esc(DOCS[it.k][0])}${DIR[it.k]===0?' <span class="muted">(참고)</span>':''}${dis?' <span class="muted" title="모델 계수 방향 ≠ 가설">≠</span>':''}</span><span class="r num">${fmt(it.mean,it.k.includes('krw')?0:2)}</span><span class="r num" style="color:${c}">${scoped?(it.dz>=0?'+':'')+fmt(it.dz,2):'<span class="muted">·</span>'}</span><span class="spark">${sparkbar(it.vals,it.k)}</span><span class="r num" style="color:${it.hz>0.3?'var(--crit)':'var(--ink-2)'}">${it.hz===null?'–':(it.hz>=0?'+':'')+fmt(it.hz,2)}</span></div>`}).join('');
+    const c2=it.ref?'var(--muted)':it.hz>0.3?'var(--crit)':'var(--ink-2)';
+    return `<div class="sig" data-k="${it.k}"><span class="dim" title="${esc(DOCS[it.k][1])}${dis?' · 모델 계수 부호('+(COEF[it.k]>0?'+':'−')+')가 가설 방향과 다름: 표본이 작을 때 흔하며, 색은 가설 방향 기준':''}${it.ref?' · 참고 신호: 위험 방향 없음, z는 값 기준':''}">${esc(DOCS[it.k][0])}${it.ref?' <span class="muted">(참고)</span>':''}${dis?' <span class="muted" title="모델 계수 방향 ≠ 가설">≠</span>':''}</span><span class="r num">${fmt(it.mean,it.k.includes('krw')?0:2)}</span><span class="r num" style="color:${it.ref?'var(--muted)':c}">${scoped?(it.dz>=0?'+':'')+fmt(it.dz,2):'<span class="muted">·</span>'}</span><span class="spark">${sparkbar(it.vals,it.k)}</span><span class="r num" style="color:${c2}">${it.hz===null?'–':(it.hz>=0?'+':'')+fmt(it.hz,2)}</span></div>`}).join('');
 }
 
 /* 가설 */
@@ -265,7 +268,7 @@ function renderSignals(){
 
 /* 히트맵 */
 function renderHeat(){
-  const feats=FEATS.filter(k=>DIR[k]!==0);
+  const feats=FEATS.filter(k=>DIR[k]!==0&&STATS[k].sd>0);   // 방향 있는 신호 중 값이 변하는 것만
   const units={};R.forEach(r=>(units[r.org_unit_name]=units[r.org_unit_name]||[]).push(r));
   const rows=Object.entries(units).map(([u,rs])=>({u,div:rs[0].division_name,n:rs.length,hi:rs.filter(r=>r.risk_band==='높음').length,avg:avg(rs),
     z:feats.map(k=>{const v=rs.map(r=>(Z[r.employee_id]||{})[k]).filter(x=>x!==undefined&&x!==null);return v.length?adj(k,v.reduce((a,b)=>a+b,0)/v.length):null})})).sort((a,b)=>b.avg-a.avg);
@@ -295,7 +298,7 @@ function renderWatch(){
 (function renderVal(){
   const cl=EX.checklist||[]; $('#valOverall').textContent=EX.overall_ko?`종합 ${EX.overall_ko}`:'';
   const short=d=>d.replace(/\s*\(근거:.*$/,'');
-  $('#val').innerHTML=cl.length?`<table style="table-layout:fixed"><colgroup><col style="width:28px"><col style="width:130px"><col style="width:58px"><col></colgroup><tbody>${cl.map(c=>`<tr title="${esc(c.detail)}"><td class="muted">${c.id}</td><td class="dim wrap">${esc(c.item)}</td><td><span class="status ${c.status_ko}"><i></i>${c.status_ko}</span></td><td class="muted wrap" style="font-size:11px;line-height:1.3">${esc(short(c.detail))}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">검증 시트 없음</div>';
+  $('#val').innerHTML=cl.length?`<table style="table-layout:fixed"><colgroup><col style="width:28px"><col style="width:120px"><col style="width:72px"><col></colgroup><tbody>${cl.map(c=>`<tr title="${esc(c.detail)}"><td class="muted">${c.id}</td><td class="dim wrap">${esc(c.item)}</td><td><span class="status ${c.status_ko}"><i></i>${c.status_ko}</span></td><td class="muted wrap" style="font-size:11px;line-height:1.3">${esc(short(c.detail))}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">검증 시트 없음</div>';
   const acts=EX.actions||[];$('#acts').innerHTML=acts.length?`<table><tbody>${acts.map(a=>`<tr><td class="muted">${esc(a.category)}</td><td class="dim">${esc(a.signal)}</td><td class="wrap">${esc(a.action)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">없음</div>';
   const u=EX.unit_actions||[];$('#units').innerHTML=u.length?`<table><tbody>${u.map(x=>`<tr style="cursor:pointer" data-unit="${esc(x.unit)}" data-div="${esc(x.division)}"><td class="dim">${esc(x.unit)}</td><td class="r num muted">${x.n}</td><td class="r num" style="color:${riskColor(parseFloat(x.avg_risk))}">${fmt(x.avg_risk)}</td><td class="wrap muted">${esc(x.signals)}</td><td class="wrap">${esc(x.checks)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">없음</div>';
   document.querySelectorAll('#units tr[data-unit]').forEach(tr=>tr.onclick=()=>{state.unit=tr.dataset.unit;state.div=tr.dataset.div;renderAll()});
@@ -377,10 +380,23 @@ def _clean(v):
 
 
 def build_dashboard(features: pd.DataFrame, scores: pd.DataFrame, metrics: dict, manifest: dict, overview: dict,
-                    out_path: Path, unavailable: list | None = None, extras: dict | None = None) -> Path:
+                    out_path: Path, unavailable: list | None = None, extras: dict | None = None, share: bool = False) -> Path:
+    """share=True: 공유용. 이름·사번을 실제로 제거(가명 P-001…)하고 스파크라인 키도 같이 바꾼다. 블러가 아니라 데이터 자체가 없다."""
     from . import __version__
     extras = extras or {}
     df = features.merge(scores, on="employee_id", how="left")
+    if share:
+        order = df.sort_values("risk_score", ascending=False).employee_id.tolist()
+        alias = {eid: f"P-{i + 1:03d}" for i, eid in enumerate(order)}
+        overview = dict(overview)
+        if overview.get("spark"):
+            overview["spark"] = {alias[k]: v for k, v in overview["spark"].items() if k in alias}
+        df["employee_id"] = df["employee_id"].map(alias)
+        df["name"] = "비식별"
+        for c in ("top_drivers_tech",):
+            if c in df:
+                df[c] = ""
+        extras = {k: v for k, v in extras.items() if k != "question"} | {"question": extras.get("question", {})}
     if "drivers_plain" in df:
         df["top_drivers_tech"] = df["top_drivers"]
         df["top_drivers"] = df["drivers_plain"]
@@ -427,12 +443,14 @@ def build_dashboard(features: pd.DataFrame, scores: pd.DataFrame, metrics: dict,
         about = ("퇴사 위험 지수는 공개 가중치로 신호를 합친 회사 내 상대 지수(0~1)이며 예측 확률이 아니다. 개인 평가나 인사 조치의 단독 근거로 쓰면 안 된다. "
                  "히트맵·신호 보드의 위험 방향은 가설(FEATURE_DOCS)의 방향을 따른다.")
     about += " 성별·국적·체류자격·혼인·가족·주거·거주지·병역·나이·병가·설문 미응답은 개인 점수에 쓰지 않았다. 모든 필터는 표시 필터(재계산 없음)다. 외부 리소스를 쓰지 않아 오프라인에서도 열린다."
+    if share:
+        about = "공유용 버전: 이름과 사번을 제거하고 위험 순 가명(P-001…)으로 바꿨다. 원본 식별 정보는 이 파일에 들어 있지 않다. " + about
     if unavailable:
         about += " 입력에 없어 계산하지 못한 신호: " + ", ".join(FEATURE_DOCS[c][0] for c in unavailable if c in FEATURE_DOCS) + "."
 
     data = dict(rows=rows, feats=feats, dir=direction, coef=coef_sign, z=z_by_emp, stats=stats, src=SOURCE_TABLE, short=SHORT)
     meta = dict(mode=mode, cv_auc=metrics.get("cv_auc"), positives=metrics.get("positives"), as_of=str(manifest.get("as_of")), company=str(manifest["company"]["name"]))
-    html = (TEMPLATE.replace("__TITLE__", f"{manifest['company']['name']} HR 리스크 터미널")
+    html = (TEMPLATE.replace("__TITLE__", f"{manifest['company']['name']} HR 리스크 터미널" + (" (공유용)" if share else ""))
             .replace("__COMPANY__", str(manifest["company"]["name"])).replace("__AS_OF__", str(manifest.get("as_of")))
             .replace("__MODECLS__", mode_cls).replace("__MODE_LABEL__", mode_label)
             .replace("__SOURCE__", str(manifest.get("source_file") or "")).replace("__ENGINE__", __version__)
