@@ -70,7 +70,13 @@ claude plugin marketplace add ~/project_tpc/hr_attrition_plugin
 claude plugin install hr-attrition@tpc-hr
 ```
 
-세션 안에서 `/predict_attrition <xlsx 경로>`, `/make_dashboard <결과 xlsx> <원본 xlsx>`. 소스 폴더에서 직접 읽히므로 SKILL.md를 고치면 다음 세션(또는 `/reload-plugins`)에 반영됩니다. 저장소로 배포한 뒤에는 `/plugin install hr-attrition --marketplace <owner>/<repo>`.
+또는 GitHub 저장소에서 바로:
+
+```
+/plugin install hr-attrition --marketplace jj-tpc/tpc-hr-plugin
+```
+
+세션 안에서 `/predict_attrition <xlsx 경로>`, `/make_dashboard <결과 xlsx> <원본 xlsx>`. 로컬 폴더로 설치했으면 SKILL.md를 고친 뒤 다음 세션(또는 `/reload-plugins`)에 반영됩니다.
 
 </details>
 

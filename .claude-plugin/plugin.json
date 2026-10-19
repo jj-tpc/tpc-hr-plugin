@@ -6,6 +6,8 @@
     "name": "The Prompt Company"
   },
   "license": "Proprietary",
+  "homepage": "https://github.com/jj-tpc/tpc-hr-plugin",
+  "repository": "https://github.com/jj-tpc/tpc-hr-plugin",
   "keywords": ["hr", "attrition", "turnover", "dashboard", "people-analytics", "korean"],
   "skills": ["./skill/predict_attrition", "./skill/make_dashboard"],
   "agents": ["./agents/hr-analyst.md"]
